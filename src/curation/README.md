@@ -8,27 +8,8 @@ from the PDB.
 
 ## Prerequisites
 
-- [Miniforge](https://github.com/conda-forge/miniforge) (or Miniconda)
+- `install.sh`
 
-## Installation
-
-```bash
-bash install.sh
-```
-
-`install.sh` performs three steps:
-
-| Step | What it does |
-|------|--------------|
-| 1 | Create the **`promise`** conda env (Python 3.12, gemmi, BioPython, pandas, etc.) |
-| 2 | Create the **`prodigy-cryst`** conda env (Python 3.8, prodigy_cryst) |
-| 3 | `pip install -e .` — registers the `promise_data` CLI |
-
-> **Why two environments?**
-> `prodigy-cryst` requires Python 3.8 + legacy NumPy/scikit-learn versions.
-> The pipeline invokes it automatically via `conda run -n prodigy-cryst`.
-
----
 
 ## Quick Start
 
@@ -44,8 +25,9 @@ promise_data run \
 |--------|-------------|
 | `--spec` | Cluster specification JSON (GroupSet format) |
 | `--mmcif-store` | Directory of PDB mmCIF files (`*.cif`) |
+| `--keep-intermediates` | Keep intermediate directories (asms-raw, asms-bio, etc.) under `data/`. By default, they are written to a temporary directory and deleted when the pipeline finishes. |
 
-All intermediate and final outputs are written under `data/`.
+All outputs are written under `data/`. Final curated dataset: `data/dataset-pipeline/`.
 
 ### Downloading mmCIF Files
 
@@ -89,7 +71,7 @@ promise_data steps
 | 8 | `process_metal` | `data/asms-metal/` |
 | 9 | `curate_sets` | `data/combinations/` |
 | 10 | `select_representative` | `data/combinations-filtered/` |
-| 11 | `filter_seq_clusters` | `data/combinations-seqfiltered/` |
+| 11 | `filter_seq_clusters` | `data/dataset-pipeline/` |
 
 ### Partial Execution
 
@@ -125,26 +107,26 @@ python -m curation.curate_sets --help
 ```
 src/curation/
 │
-├── Utilities
-│   ├── constants.py               Shared constant sets (ions, ligands, amino acids, etc.)
-│   ├── typedefs.py                Data models (GroupSet, TMScoreResult, etc.)
-│   ├── pdb_utils.py               PDB/mmCIF structure parsing helpers
-│   └── download_mmcif.py          Download mmCIF files from RCSB
-│
 ├── CLI & Orchestration
 │   ├── __init__.py
 │   ├── __main__.py                python -m curation support
 │   ├── run.py                     promise_data CLI entry point
-│   └── pipeline.py                Step registry and run_pipeline()
+│   └── pipeline.py                Step registry, run_pipeline(), tmpdir management
 │
-└── Pipeline Steps
+├── Utilities
+│   ├── constants.py               Shared constants (ions, ligands, amino acids, etc.)
+│   ├── typedefs.py                Data models (GroupSet, TMScoreResult, etc.)
+│   ├── pdb_utils.py               PDB/mmCIF structure parsing helpers
+│   └── download_mmcif.py          Download mmCIF files from RCSB
+│
+└── Pipeline Steps (pipeline/)
     ├── create_msa.py               1.  Build MSAs, extract Cα coordinates
     ├── pairwise_tm_multiprocessing.py  2.  Pairwise TM-score computation
     ├── cluster_by_tmscore.py       3.  Agglomerative clustering by TM-score
     ├── prepare_inputs_gemmi.py     4.  Assembly extraction from mmCIF
     ├── run_prodigy.py              5.  Crystal contact classification
     ├── filter_xtal.py              6.  Crystal-contact assembly filtering
-    ├── subsets.py                   7.  Sequence-identity based filtering
+    ├── subsets.py                  7.  Sequence-identity based filtering
     ├── process_metal.py            8.  Low-coordination metal filtering
     ├── curate_sets.py              9.  Conformational-change pair extraction
     ├── select_representative.py   10.  Representative selection by binding-site
@@ -152,6 +134,8 @@ src/curation/
 
 ```
 
-Environment files (`environment.yaml`, `environment-prodigy.yaml`, `install.sh`)
-are located in the project root.
+**Key Design Decisions:**
+
+- **Intermediate Output Management**: By default, `asms-raw/`, `asms-bio/`, `asms-subset/`, `asms-metal/`, `combinations/`, `combinations-filtered/`, and `seqcluster_work/` are written to a temporary directory and deleted after pipeline completion. Use `--keep-intermediates` to persist them.
+- **Final Output**: `data/dataset-pipeline/` contains the final redundancy-filtered dataset.
 

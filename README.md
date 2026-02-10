@@ -29,7 +29,6 @@ This creates two conda environments:
 - `promise`: Main curation pipeline (Python 3.9+)
 - `prodigy-cryst`: Crystal contact classifier (Python 3.8, used internally)
 
-See [src/curation/README.md](src/curation/README.md) for detailed installation instructions.
 
 ## Usage
 
@@ -76,7 +75,7 @@ data/
 ├── asms-metal/                # Metal coordination filtered
 ├── combinations/              # Conformational pair combinations
 ├── combinations-filtered/     # Representative pairs
-└── combinations-seqfiltered/  # Final redundancy-filtered dataset
+└── dataset-pipeline/          # Final redundancy-filtered dataset
 ```
 
 ## Examples

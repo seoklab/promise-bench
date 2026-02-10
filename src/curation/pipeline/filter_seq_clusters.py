@@ -178,9 +178,9 @@ def process_category(
 @click.option(
     "--out-dir",
     type=click.Path(path_type=Path),
-    default=Path("data/combinations-seqfiltered"),
+    default=Path("data/dataset-pipeline"),
     show_default=True,
-    help="Output directory for filtered CSVs.",
+    help="Output directory for the final filtered dataset.",
 )
 @click.option(
     "--work-dir",

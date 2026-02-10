@@ -3,6 +3,13 @@
 Each step is a pair (label, callable) where the callable accepts
 ``(spec, mmcif_store, workdir)`` and returns the Click args list to be
 invoked on that step's ``main`` / ``cli`` click command.
+
+Intermediate outputs
+--------------------
+By default the runner writes intermediate artefacts (``asms-raw``,
+``asms-bio``, …) under a temporary directory and deletes them once the
+pipeline finishes.  Pass ``keep_intermediates=True`` to write them to
+the normal ``data/`` tree instead.
 """
 
 from __future__ import annotations
@@ -10,6 +17,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -19,6 +27,22 @@ import click
 # ---------------------------------------------------------------------------
 # Step registry
 # ---------------------------------------------------------------------------
+
+# Directories inside ``data/`` that are intermediate artefacts.
+# They will be written to tmpdir and cleaned up unless the user
+# explicitly requests keeping them.
+INTERMEDIATE_DIRS: set[str] = {
+    "asms-raw",
+    "asms-bio",
+    "asms-subset",
+    "asms-metal",
+    "combinations",
+    "combinations-filtered",
+    "seqcluster_work",
+}
+
+# Final output directory name (replaces "combinations-seqfiltered")
+FINAL_OUTPUT_DIR = "dataset-pipeline"
 
 
 class Step:
@@ -36,7 +60,7 @@ class Step:
         self.label = label
         self.module_path = module_path  # e.g. "curation.create_msa"
         self.entry = entry  # click command name inside module
-        self.args_fn = args_fn  # (spec, mmcif_store, workdir) -> list[str]
+        self.args_fn = args_fn  # (spec, mmcif_store, workdir, data, tmp) -> list[str]
 
 
 def _resolve_prodigy() -> Optional[str]:
@@ -62,12 +86,36 @@ def _resolve_prodigy() -> Optional[str]:
         return None
 
 
+def _d(data: Path, tmp: Path, name: str) -> str:
+    """Resolve an intermediate directory.
+
+    If *tmp* differs from *data*, intermediates go under *tmp*;
+    otherwise they land in the normal ``data/`` tree.
+    """
+    if name in INTERMEDIATE_DIRS and tmp != data:
+        p = tmp / name
+    else:
+        p = data / name
+    p.mkdir(parents=True, exist_ok=True)
+    return str(p)
+
+
+def _f(data: Path, tmp: Path, name: str) -> str:
+    """Resolve an intermediate *file* (e.g. ``pair-calls.csv``)."""
+    if tmp != data:
+        p = tmp / name
+    else:
+        p = data / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return str(p)
+
+
 STEPS: list[Step] = [
     # --- Phase 1: extract pairs ---
     Step(
         "create_msa",
         "curation.create_msa",
-        args_fn=lambda s, m, w: ["--mmcif-dir", str(m), str(s)],
+        args_fn=lambda s, m, w, d, t: ["--mmcif-dir", str(m), str(s)],
     ),
     Step(
         "pairwise_tm",
@@ -81,36 +129,89 @@ STEPS: list[Step] = [
     Step(
         "prepare_inputs",
         "curation.prepare_inputs_gemmi",
-        args_fn=lambda s, m, w: ["--mmcif-dir", str(m)],
+        args_fn=lambda s, m, w, d, t: [
+            "--mmcif-dir",
+            str(m),
+            "--out-root",
+            _d(d, t, "asms-raw"),
+            "--save-assemblies-dir",
+            str(d / "cif-asms"),  # always keep
+        ],
     ),
     Step(
         "run_prodigy",
         "curation.run_prodigy",
+        args_fn=lambda s, m, w, d, t: [
+            "--raw-dir",
+            _d(d, t, "asms-raw"),
+            "--out-csv",
+            _f(d, t, "pair-calls.csv"),
+        ],
     ),
     Step(
         "filter_xtal",
         "curation.filter_xtal",
+        args_fn=lambda s, m, w, d, t: [
+            "--asm-raw-dir",
+            _d(d, t, "asms-raw"),
+            "--out-dir",
+            _d(d, t, "asms-bio"),
+            "--pair-calls-csv",
+            _f(d, t, "pair-calls.csv"),
+        ],
     ),
     Step(
         "subsets",
         "curation.subsets",
+        args_fn=lambda s, m, w, d, t: [
+            "--asm-bio-dir",
+            _d(d, t, "asms-bio"),
+            "--out-dir",
+            _d(d, t, "asms-subset"),
+        ],
     ),
     Step(
         "process_metal",
         "curation.process_metal",
+        args_fn=lambda s, m, w, d, t: [
+            "--in-dir",
+            _d(d, t, "asms-subset"),
+            "--out-dir",
+            _d(d, t, "asms-metal"),
+        ],
     ),
     Step(
         "curate_sets",
         "curation.curate_sets",
         entry="cli",
+        args_fn=lambda s, m, w, d, t: [
+            "--filtered-dir",
+            _d(d, t, "asms-metal"),
+            "--outdir",
+            _d(d, t, "combinations"),
+        ],
     ),
     Step(
         "select_representative",
         "curation.select_representative",
+        args_fn=lambda s, m, w, d, t: [
+            "--dataset-dir",
+            _d(d, t, "combinations"),
+            "--out-dataset",
+            _d(d, t, "combinations-filtered"),
+        ],
     ),
     Step(
         "filter_seq_clusters",
         "curation.filter_seq_clusters",
+        args_fn=lambda s, m, w, d, t: [
+            "--dataset-dir",
+            _d(d, t, "combinations"),
+            "--out-dir",
+            str(d / FINAL_OUTPUT_DIR),
+            "--work-dir",
+            _d(d, t, "seqcluster_work"),
+        ],
     ),
 ]
 
@@ -138,6 +239,7 @@ def run_pipeline(
     *,
     start_from: Optional[str] = None,
     stop_after: Optional[str] = None,
+    keep_intermediates: bool = False,
 ):
     """Execute the full pipeline (or a slice of it).
 
@@ -153,6 +255,12 @@ def run_pipeline(
         Resume from this step label (inclusive).
     stop_after : str, optional
         Stop after this step label (inclusive).
+    keep_intermediates : bool
+        If *False* (default), intermediate artefacts (``asms-raw``,
+        ``asms-bio``, ``asms-subset``, ``asms-metal``, ``combinations``,
+        ``combinations-filtered``, ``seqcluster_work``) are written to
+        a temporary directory and deleted after the run.  Set to *True*
+        to keep them under ``data/``.
     """
     labels = [s.label for s in STEPS]
 
@@ -173,7 +281,6 @@ def run_pipeline(
         stop_idx = labels.index(stop_after)
 
     selected = STEPS[start_idx : stop_idx + 1]
-    total = len(selected)
 
     # Resolve PRODIGY_CMD once if the prodigy step is in scope
     if any(s.label == "run_prodigy" for s in selected):
@@ -193,53 +300,85 @@ def run_pipeline(
     orig_cwd = Path.cwd()
     os.chdir(workdir)
 
-    log_dir = Path("data/logs")
+    data_dir = Path("data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    log_dir = data_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Intermediate artefacts location
+    tmp_ctx = None
+    if keep_intermediates:
+        tmp_dir = data_dir
+    else:
+        tmp_ctx = tempfile.TemporaryDirectory(
+            prefix="promise_intermediate_", dir=workdir
+        )
+        tmp_dir = Path(tmp_ctx.name)
 
     click.echo("")
     click.echo("=" * 48)
     click.echo("promise-bench curation pipeline")
-    click.echo(f"  spec:        {spec}")
-    click.echo(f"  mmcif-store: {mmcif_store}")
-    click.echo(f"  workdir:     {workdir}")
-    click.echo(f"  logs:        {workdir / log_dir}")
-    click.echo(f"  steps:       {start_idx + 1}..{stop_idx + 1} / {len(STEPS)}")
+    click.echo(f"  spec:               {spec}")
+    click.echo(f"  mmcif-store:        {mmcif_store}")
+    click.echo(f"  workdir:            {workdir}")
+    click.echo(f"  logs:               {workdir / log_dir}")
+    click.echo(f"  steps:              {start_idx + 1}..{stop_idx + 1} / {len(STEPS)}")
+    click.echo(f"  keep-intermediates: {keep_intermediates}")
+    if not keep_intermediates:
+        click.echo(f"  tmpdir:             {tmp_dir}")
+    click.echo(f"  final output:       data/{FINAL_OUTPUT_DIR}")
     click.echo("=" * 48)
 
-    for i, step in enumerate(selected, 1):
-        step_num = labels.index(step.label) + 1
-        log_path = log_dir / f"{step_num:02d}_{step.label}.log"
-        click.echo(f"\n[{step_num}/{len(STEPS)}] {step.label} ", nl=False)
+    try:
+        for i, step in enumerate(selected, 1):
+            step_num = labels.index(step.label) + 1
+            log_path = log_dir / f"{step_num:02d}_{step.label}.log"
+            click.echo(f"\n[{step_num}/{len(STEPS)}] {step.label} ", nl=False)
 
-        t0 = time.time()
-        cmd = _import_click_cmd(step)
+            t0 = time.time()
+            cmd = _import_click_cmd(step)
 
-        args: list[str] = []
-        if step.args_fn is not None:
-            args = step.args_fn(spec, mmcif_store, workdir)
+            args: list[str] = []
+            if step.args_fn is not None:
+                args = step.args_fn(spec, mmcif_store, workdir, data_dir, tmp_dir)
 
-        # Redirect stdout/stderr to log file
-        with open(log_path, "w") as log_f:
-            old_stdout, old_stderr = sys.stdout, sys.stderr
-            sys.stdout = log_f
-            sys.stderr = log_f
-            try:
-                cmd.main(list(args), standalone_mode=False)
-            except Exception:
-                sys.stdout, sys.stderr = old_stdout, old_stderr
-                elapsed = time.time() - t0
-                click.echo(f"FAILED ({elapsed:.1f}s)")
-                click.echo(f"  see {log_path}", err=True)
-                raise
-            finally:
-                sys.stdout, sys.stderr = old_stdout, old_stderr
+            # Redirect stdout/stderr to log file
+            with open(log_path, "w") as log_f:
+                old_stdout, old_stderr = sys.stdout, sys.stderr
+                sys.stdout = log_f
+                sys.stderr = log_f
+                try:
+                    cmd.main(list(args), standalone_mode=False)
+                except Exception:
+                    sys.stdout, sys.stderr = old_stdout, old_stderr
+                    elapsed = time.time() - t0
+                    click.echo(f"FAILED ({elapsed:.1f}s)")
+                    click.echo(f"  see {log_path}", err=True)
+                    raise
+                finally:
+                    sys.stdout, sys.stderr = old_stdout, old_stderr
 
-        elapsed = time.time() - t0
-        click.echo(f"OK ({elapsed:.1f}s) -> {log_path}")
+            elapsed = time.time() - t0
+            click.echo(f"OK ({elapsed:.1f}s) -> {log_path}")
+    finally:
+        # Clean up intermediates
+        if tmp_ctx is not None:
+            total_size = (
+                sum(f.stat().st_size for f in tmp_dir.rglob("*") if f.is_file())
+                if tmp_dir.exists()
+                else 0
+            )
+            click.echo(
+                f"\nCleaning up intermediates ({total_size / (1024**2):.1f} MB) ..."
+            )
+            tmp_ctx.cleanup()
+            click.echo("  done.")
 
     os.chdir(orig_cwd)
 
     click.echo("")
     click.echo("=" * 48)
     click.echo("Curation pipeline complete!")
+    click.echo(f"  Final output: {workdir / data_dir / FINAL_OUTPUT_DIR}")
     click.echo("=" * 48)

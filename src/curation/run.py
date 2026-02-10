@@ -59,12 +59,25 @@ def promise_data():
     default=None,
     help="Stop after this step (inclusive).",
 )
+@click.option(
+    "--keep-intermediates",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help=(
+        "Keep intermediate artefacts (asms-raw, asms-bio, asms-subset, "
+        "asms-metal, combinations, combinations-filtered, seqcluster_work) "
+        "under data/. By default they are written to a temporary directory "
+        "and deleted when the pipeline finishes."
+    ),
+)
 def run(
     spec: Path,
     mmcif_store: Path,
     workdir: Path,
     start_from: str | None,
     stop_after: str | None,
+    keep_intermediates: bool,
 ):
     """Run the full curation pipeline (or a slice of it)."""
     workdir = workdir.resolve()
@@ -76,6 +89,7 @@ def run(
         workdir,
         start_from=start_from,
         stop_after=stop_after,
+        keep_intermediates=keep_intermediates,
     )
 
 
