@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "promise-data"
+version = "0.1.0"
+description = "Data curation pipeline for promise-bench"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "click",
+    "numpy",
+    "pandas",
+    "scipy",
+    "scikit-learn",
+    "joblib",
+    "tqdm",
+    "biopython",
+    "gemmi",
+    "pydantic",
+    "matplotlib",
+    "parasail",
+    "nurikit",
+]
+
+[project.scripts]
+promise_data = "curation.run:promise_data"
+
+[tool.setuptools.packages.find]
+where = ["src"]

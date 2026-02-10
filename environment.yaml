@@ -1,0 +1,43 @@
+name: promise
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python>=3.9
+
+  # Data processing
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  
+  # Command-line interface
+  - click
+  
+  # Parallel processing
+  - joblib
+  - tqdm
+  
+  # Structural biology
+  - biopython
+  - gemmi
+  
+  # Validation and data models
+  - pydantic
+  
+  # Visualization
+  - matplotlib
+  
+  # Sequence alignment
+  - parasail-python
+  
+  - foldseek
+  - mmseqs2
+  - famsa
+  
+  # Pip-only packages
+  - pip
+  - pip:
+    - nurikit
+

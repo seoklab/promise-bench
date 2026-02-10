@@ -1,0 +1,21 @@
+# Environment for prodigy-cryst
+# This is a separate environment required for run_prodigy.py
+# prodigy-cryst requires Python 3.8 and specific old package versions
+# that are incompatible with Python 3.9+
+# NOTE: prodigy-cryst's dependency spec (numpy>=1.20) is incorrect;
+#       scikit-learn 0.22 requires numpy<1.20 due to np.float removal
+
+name: prodigy-cryst
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - numpy=1.19
+  - pandas
+  - click
+  - tqdm
+  - pip
+  - pip:
+    - scikit-learn==0.22
+    - prodigy-cryst
