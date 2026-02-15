@@ -18,10 +18,11 @@ def cluster_by_tmscore(
 ):
     data = TMScoreResult(**np.load(tmscore_result))
     scoremap = D.squareform(data.tm_scores)
+    rmsdmap = D.squareform(data.rmsds)
 
     cluster = AgglomerativeClustering(
         n_clusters=None,
-        distance_threshold=0.2,
+        distance_threshold=0.1,
         metric="precomputed",
         linkage="complete",
     ).fit(1 - scoremap)
@@ -33,11 +34,26 @@ def cluster_by_tmscore(
     clusters.parent.mkdir(exist_ok=True)
     df.to_csv(clusters, index=False)
 
-    pairs = np.stack(np.nonzero((scoremap < cutoff) & (scoremap > 0)))
-    if len(pairs) == 0:
+    # Only consider pairs from different clusters
+    diff_cluster = cluster.labels_[:, None] != cluster.labels_[None, :]
+    upper = np.triu(np.ones_like(scoremap, dtype=bool), k=1)
+    base_mask = diff_cluster & upper
+
+    # 1st pass: TM < 0.8
+    mask1 = base_mask & (scoremap < cutoff) & (scoremap > 0)
+
+    # 2nd pass: 0.8 <= TM < 0.9 and RMSD > 3.0
+    mask2 = base_mask & (scoremap >= cutoff) & (scoremap < 0.9) & (rmsdmap > 3.0)
+
+    mask = mask1 | mask2
+    x, y = np.nonzero(mask)
+    if len(x) == 0:
         return None
 
-    x, y = pairs[:, cluster.labels_[pairs[0]] < cluster.labels_[pairs[1]]]
+    # Ensure cluster-x < cluster-y
+    swap = cluster.labels_[x] > cluster.labels_[y]
+    x[swap], y[swap] = y[swap], x[swap]
+
     df = pd.DataFrame.from_dict(
         {
             "center": tmscore_result.stem,
@@ -46,6 +62,7 @@ def cluster_by_tmscore(
             "chain-x": data.chains[x],
             "chain-y": data.chains[y],
             "TMscore": scoremap[x, y],
+            "RMSD": rmsdmap[x, y],
         }
     ).sort_values(["cluster-x", "cluster-y", "TMscore"])
     return df
