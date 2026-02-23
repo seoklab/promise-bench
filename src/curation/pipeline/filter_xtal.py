@@ -12,6 +12,7 @@ from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
 from ..utils.constants import _AA3, _NT, LIGAND_EXCLUDE
+from ._data_root import DataRootCommand
 
 
 def _get_assembly(
@@ -538,7 +539,9 @@ def process_file_worker(
     )
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.command(
+    cls=DataRootCommand, context_settings=dict(help_option_names=["-h", "--help"])
+)
 @click.option(
     "--asm-raw-dir",
     type=click.Path(path_type=Path, exists=True, file_okay=False),

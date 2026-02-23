@@ -19,6 +19,7 @@ from ..utils.constants import (
     LIGAND_EXCLUDE,
     NUCLEOTIDE_3C,
 )
+from ._data_root import DataRootCommand
 
 CSV_HEADERS = [
     "pdb",
@@ -545,7 +546,9 @@ def process_cluster_file(
     return str(out_csv), len(out_rows)
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.command(
+    cls=DataRootCommand, context_settings=dict(help_option_names=["-h", "--help"])
+)
 @click.option(
     "--mmcif-dir",
     type=click.Path(path_type=Path, exists=True, file_okay=False),

@@ -13,6 +13,7 @@ from nuri.tools.chimera import match_maker
 from tqdm import tqdm
 
 from ..utils.typedefs import TMScoreResult
+from ._data_root import DataRootCommand
 
 
 def _score(
@@ -33,7 +34,12 @@ def _score(
     qc_common = qc[qi]
     tc_common = tc[ti]
 
-    mm_result = match_maker(qc_common, tc_common)
+    try:
+        mm_result = match_maker(qc_common, tc_common)
+    except RuntimeError:
+        qn, tn = query_data[0], templ_data[0]
+        print(f"MATCH_MAKER_FAILED\t{qn}\t{tn}", flush=True)
+        return 0.0, float("inf")
     alignment = [(i, i) for i in mm_result.selected]
 
     # Transform query coordinates and calculate full RMSD
@@ -120,7 +126,7 @@ def run_tmscore_parallel(
     np.savez_compressed(scores, **asdict(result))
 
 
-@click.command()
+@click.command(cls=DataRootCommand)
 @click.option("--nproc", "-n", type=int, default=8)
 @click.option(
     "--scores",

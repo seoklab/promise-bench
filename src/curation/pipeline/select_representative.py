@@ -13,6 +13,7 @@ from Bio.PDB import MMCIFParser, NeighborSearch
 from joblib import Parallel, delayed
 
 from ..utils.constants import AA_3TO1
+from ._data_root import DataRootCommand
 
 CONTACT_DISTANCE = 5.0
 
@@ -488,7 +489,9 @@ def _collect_entries(dataset_dir: Path) -> Dict[str, List[dict]]:
     return {stem: list(entries.values()) for stem, entries in cluster_entries.items()}
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.command(
+    cls=DataRootCommand, context_settings={"help_option_names": ["-h", "--help"]}
+)
 @click.option(
     "--dataset-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),

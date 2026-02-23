@@ -6,6 +6,8 @@ import click
 import numpy as np
 import pandas as pd
 
+from ._data_root import DataRootCommand
+
 
 def _s(x) -> str:
     return "" if (pd.isna(x) or x is None) else str(x)
@@ -331,7 +333,9 @@ def write_per_type(outdir: Path, accum: Dict[str, List[Dict[str, Any]]]):
             pd.DataFrame(rows).drop_duplicates().to_csv(out_path, index=False)
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.command(
+    cls=DataRootCommand, context_settings=dict(help_option_names=["-h", "--help"])
+)
 @click.option(
     "--filtered-dir",
     type=click.Path(exists=True, file_okay=False),

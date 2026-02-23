@@ -16,6 +16,7 @@ from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
 from ..utils.constants import _AA3, _NT
+from ._data_root import DataRootCommand
 
 DBG_DEFAULTS = {
     "stage": "",
@@ -603,7 +604,7 @@ def process_file(
     }
 
 
-@click.command(context_settings=dict(show_default=True))
+@click.command(cls=DataRootCommand, context_settings=dict(show_default=True))
 @click.option(
     "--asm-bio-dir",
     type=click.Path(file_okay=False, path_type=Path),

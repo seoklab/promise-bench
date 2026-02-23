@@ -9,6 +9,8 @@ from typing import Dict, List, Set, Tuple
 import click
 import pandas as pd
 
+from ._data_root import DataRootCommand
+
 
 def _cluster_stem(cluster_csv: str) -> str:
     """'A2/8A27_1' -> '8A27_1'"""
@@ -160,7 +162,9 @@ def process_category(
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.command(
+    cls=DataRootCommand, context_settings={"help_option_names": ["-h", "--help"]}
+)
 @click.option(
     "--dataset-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),

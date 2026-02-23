@@ -20,6 +20,7 @@ from pydantic import (
 from tqdm import tqdm
 
 from ..utils.typedefs import GroupSet
+from ._data_root import DataRootCommand
 
 
 class ResidueId(BaseModel):
@@ -234,6 +235,10 @@ def load_cif_chain(index: str, resseq: MsaResSeq, mmcif_dir: Path = Path(".")):
     return index, np.ascontiguousarray(coords, dtype=np.float32), align_to_idx
 
 
+def _nonempty(path: Path) -> bool:
+    return path.exists() and path.stat().st_size > 0
+
+
 def msa_align_coords(
     cluster: list[str],
     seqs: Path,
@@ -244,6 +249,9 @@ def msa_align_coords(
     mmcif_dir: Path = Path("."),
 ):
     logging.basicConfig(level=logging.FATAL)
+
+    if _nonempty(seqs) and _nonempty(msa) and _nonempty(result):
+        return
 
     seqs.parent.mkdir(exist_ok=True)
     msa.parent.mkdir(exist_ok=True)
@@ -280,7 +288,7 @@ def msa_align_coords(
     np.savez_compressed(result, coords=mapped_coords)
 
 
-@click.command()
+@click.command(cls=DataRootCommand)
 @click.option("--nproc", "-n", type=int, default=8)
 @click.option(
     "--mmcif-dir",

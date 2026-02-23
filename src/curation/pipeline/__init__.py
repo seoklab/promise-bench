@@ -240,6 +240,7 @@ def run_pipeline(
     start_from: Optional[str] = None,
     stop_after: Optional[str] = None,
     keep_intermediates: bool = False,
+    data_root: Optional[Path] = None,
 ):
     """Execute the full pipeline (or a slice of it).
 
@@ -300,7 +301,7 @@ def run_pipeline(
     orig_cwd = Path.cwd()
     os.chdir(workdir)
 
-    data_dir = Path("data")
+    data_dir = data_root if data_root is not None else Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
 
     log_dir = data_dir / "logs"
@@ -340,8 +341,10 @@ def run_pipeline(
             cmd = _import_click_cmd(step)
 
             args: list[str] = []
+            if data_root is not None:
+                args.extend(["-C", str(data_dir)])
             if step.args_fn is not None:
-                args = step.args_fn(spec, mmcif_store, workdir, data_dir, tmp_dir)
+                args.extend(step.args_fn(spec, mmcif_store, workdir, data_dir, tmp_dir))
 
             # Redirect stdout/stderr to log file
             with open(log_path, "w") as log_f:
