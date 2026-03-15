@@ -9,7 +9,7 @@ from sklearn.cluster import AgglomerativeClustering
 from tqdm import tqdm
 
 from ..utils.typedefs import TMScoreResult
-from ._data_root import DataRootCommand
+from ..utils._data_root import DataRootCommand
 
 
 def cluster_by_tmscore(
@@ -23,7 +23,7 @@ def cluster_by_tmscore(
 
     cluster = AgglomerativeClustering(
         n_clusters=None,
-        distance_threshold=0.1,
+        distance_threshold=0.2,
         metric="precomputed",
         linkage="complete",
     ).fit(1 - scoremap)

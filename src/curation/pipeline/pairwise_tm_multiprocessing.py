@@ -12,16 +12,20 @@ from nuri.tools import tm
 from nuri.tools.chimera import match_maker
 from tqdm import tqdm
 
+from ..utils._data_root import DataRootCommand
 from ..utils.typedefs import TMScoreResult
-from ._data_root import DataRootCommand
 
 
 def _score(
-    query_data: tuple[str, np.ndarray, dict[int, int]],
-    templ_data: tuple[str, np.ndarray, dict[int, int]],
+    query_data,
+    templ_data,
 ):
-    _, qc, query_map = query_data
-    _, tc, target_map = templ_data
+    qn, qc, query_map, query_len = _unpack_entry(query_data)
+    tn, tc, target_map, target_len = _unpack_entry(templ_data)
+
+    lshort, llong = sorted((query_len, target_len))
+    if lshort == 0 or (llong / lshort) > 1.5:
+        return 0.0, float("inf")
 
     lmin = min(len(query_map), len(target_map))
 
@@ -37,7 +41,6 @@ def _score(
     try:
         mm_result = match_maker(qc_common, tc_common)
     except RuntimeError:
-        qn, tn = query_data[0], templ_data[0]
         print(f"MATCH_MAKER_FAILED\t{qn}\t{tn}", flush=True)
         return 0.0, float("inf")
     alignment = [(i, i) for i in mm_result.selected]
@@ -51,9 +54,22 @@ def _score(
     return tms, full_rmsd
 
 
+def _unpack_entry(data):
+    if len(data) == 4:
+        chain, coords, align_map, seq_len = data
+        return chain, coords, align_map, int(seq_len)
+
+    chain, coords, align_map = data
+    return chain, coords, align_map, len(align_map)
+
+
+def _coord_len(data) -> int:
+    return len(data[1])
+
+
 def process_group(group: Path, scores: Path, tmpdir: Path):
     cluster = np.load(group, allow_pickle=True)["coords"]
-    cluster = cluster[[len(crd) >= 100 for _, crd, _ in cluster]]
+    cluster = cluster[[_coord_len(entry) >= 100 for entry in cluster]]
     if len(cluster) < 2:
         return None
 

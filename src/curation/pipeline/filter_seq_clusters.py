@@ -9,30 +9,13 @@ from typing import Dict, List, Set, Tuple
 import click
 import pandas as pd
 
-from ._data_root import DataRootCommand
+from ..utils._data_root import DataRootCommand
+from .types import DatasetPair
 
 
 def _cluster_stem(cluster_csv: str) -> str:
-    """'A2/8A27_1' -> '8A27_1'"""
+    """'A2/8A27_1' -> '8A27_1'  (kept as free function for DataFrame.apply)"""
     return cluster_csv.split("/")[-1] if "/" in cluster_csv else cluster_csv
-
-
-def _cluster_stats(df: pd.DataFrame) -> Dict[str, Tuple[int, int]]:
-    """Return {cluster_stem: (n_conf_labels, n_entries)} from a pair CSV."""
-    stats: Dict[str, Tuple[int, int]] = {}
-    for stem, g in df.groupby(df["cluster_csv"].apply(_cluster_stem)):
-        # Unique conf labels across both sides
-        confs: set = set()
-        entries: set = set()
-        for side in ("a", "b"):
-            confs.update(g[f"{side}_conf_label"].dropna().unique())
-            entries.update(
-                g[[f"{side}_pdb", f"{side}_assembly_id", f"{side}_chain"]].apply(
-                    lambda r: f"{r.iloc[0]}_{r.iloc[1]}_{r.iloc[2]}", axis=1
-                )
-            )
-        stats[stem] = (len(confs), len(entries))
-    return stats
 
 
 def _run_mmseqs(
@@ -98,6 +81,20 @@ def _select_best(
 # ---------------------------------------------------------------------------
 # Process one category
 # ---------------------------------------------------------------------------
+def _cluster_stats_from_pairs(pairs: list[DatasetPair]) -> Dict[str, Tuple[int, int]]:
+    """Return {cluster_stem: (n_conf_labels, n_entries)} from DatasetPair list."""
+    from collections import defaultdict
+
+    confs_map: Dict[str, set] = defaultdict(set)
+    entries_map: Dict[str, set] = defaultdict(set)
+    for p in pairs:
+        stem = p.cluster_stem
+        for side in (p.a, p.b):
+            confs_map[stem].add(side.conf_label)
+            entries_map[stem].add(f"{side.pdb}_{side.assembly_id}_{side.chain}")
+    return {stem: (len(confs_map[stem]), len(entries_map[stem])) for stem in confs_map}
+
+
 def process_category(
     name: str,
     csv_path: Path,
@@ -105,17 +102,17 @@ def process_category(
     work_dir: Path,
     min_seq_id: float,
     mmseqs: str,
-) -> Tuple[pd.DataFrame, int, int]:
-    """Filter a single category CSV. Returns (filtered_df, n_before, n_clusters_removed)."""
+) -> Tuple[list[DatasetPair], int, int]:
+    """Filter a single category CSV. Returns (filtered_pairs, n_before, n_clusters_removed)."""
 
-    df = pd.read_csv(csv_path)
-    if df.empty or "cluster_csv" not in df.columns:
-        return df, 0, 0
+    pairs = DatasetPair.load_csv(csv_path)
+    if not pairs:
+        return pairs, 0, 0
 
-    n_before = len(df)
+    n_before = len(pairs)
 
     # Cluster stats for this category
-    stats = _cluster_stats(df)
+    stats = _cluster_stats_from_pairs(pairs)
     cluster_stems = set(stats.keys())
 
     # Build FASTA with representative sequences
@@ -133,7 +130,7 @@ def process_category(
 
     if n_written < 2:
         # Nothing to cluster
-        return df, n_before, 0
+        return pairs, n_before, 0
 
     # Run MMseqs2
     cat_work = work_dir / name
@@ -152,11 +149,11 @@ def process_category(
     n_removed = len(removed_stems)
 
     if not removed_stems:
-        return df, n_before, 0
+        return pairs, n_before, 0
 
     # Filter pairs
-    df_out = df[df["cluster_csv"].apply(lambda c: _cluster_stem(c) in keep)]
-    return df_out, n_before, n_removed
+    pairs_out = [p for p in pairs if p.cluster_stem in keep]
+    return pairs_out, n_before, n_removed
 
 
 # ---------------------------------------------------------------------------
@@ -241,10 +238,10 @@ def main(
             min_seq_id,
             mmseqs,
         )
-        df_out.to_csv(out_dir / f"{cat}.csv", index=False)
+        DatasetPair.save_csv(df_out, out_dir / f"{cat}.csv")
 
-        n_clusters_before = (
-            pd.read_csv(csv_path)["cluster_csv"].apply(_cluster_stem).nunique()
+        n_clusters_before = len(
+            {p.cluster_stem for p in DatasetPair.load_csv(csv_path)}
         )
         n_clusters_after = n_clusters_before - n_removed
 

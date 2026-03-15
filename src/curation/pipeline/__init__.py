@@ -189,6 +189,8 @@ STEPS: list[Step] = [
             _d(d, t, "asms-metal"),
             "--outdir",
             _d(d, t, "combinations"),
+            "--filtered-pairs",
+            _f(d, t, "filtered-pairs.csv"),
         ],
     ),
     Step(
