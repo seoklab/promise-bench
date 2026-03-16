@@ -17,7 +17,8 @@ from typing import Any, Dict, Optional, Tuple
 import click
 import pandas as pd
 
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 
 
 # ---------------------------------------------------------------------------
@@ -352,14 +353,14 @@ def apply_all_filters(
 @click.option(
     "--dataset-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default="data-95/dataset-pipeline",
+    default=str(C.final_output_dir()),
     show_default=True,
     help="Path to dataset-pipeline/ directory.",
 )
 @click.option(
     "--ligand-clusters",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default="/home.galaxy4/seeun/works/projects/casp-pipe/data/cluster-lig_ccd/cutoff_0.4.json",
+    default=C.file("ligand_clusters"),
     show_default=True,
     help=(
         "JSON file with ligand-similarity clusters. "
@@ -370,7 +371,7 @@ def apply_all_filters(
 @click.option(
     "--exclude-ligands",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default="/home/bonjae02/projects/promise-bench/data-90/excluded_ccd_codes.txt",
+    default=str(C.file("excluded_ccd_codes")),
     show_default=True,
     help=(
         "Text file listing ligand names to exclude (one per line). "

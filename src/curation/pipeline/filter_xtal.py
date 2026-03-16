@@ -11,7 +11,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils._geometry import coords_and_ligs_from_model, ligand_mediators_for_pair
 from .types import (
     LigandEdge,
@@ -374,27 +375,27 @@ def process_file_worker(
     "--asm-raw-dir",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
     required=True,
-    default="data/asms-raw",
+    default=str(C.dir("asms_raw")),
     help="Root directory containing *_asm_raw.csv files (mirrors cluster tree from step 1).",
 )
 @click.option(
     "--out-dir",
     type=click.Path(path_type=Path, file_okay=False),
     required=True,
-    default="data/asms-bio",
+    default=str(C.dir("asms_bio")),
     help="Where to write *_asm_bio.csv files (same tree).",
 )
 @click.option(
     "--pair-calls-csv",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     required=True,
-    default="data/pair-calls.csv",
+    default=str(C.file("pair_calls")),
     help="Precomputed Prodigy pair calls (clone-level).",
 )
 @click.option(
     "--assembled-cif-root",
     type=click.Path(path_type=Path, exists=False, file_okay=False),
-    default="data/cif-asms",
+    default=str(C.dir("cif_asms")),
 )
 @click.option(
     "--min-bio-prob",

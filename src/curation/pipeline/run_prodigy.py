@@ -15,7 +15,8 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 
 _PRODIGY_CMD: list[str] = _shlex.split(os.environ.get("PRODIGY_CMD", "prodigy_cryst"))
 
@@ -258,7 +259,7 @@ def _compute_stats(s: pd.Series) -> str:
     "--raw-dir",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
     required=True,
-    default="data/asms-raw",
+    default=str(C.dir("asms_raw")),
     show_default=True,
     help="Directory containing *_asm_raw.csv files.",
 )
@@ -266,7 +267,7 @@ def _compute_stats(s: pd.Series) -> str:
     "--cif-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
     required=True,
-    default="data/cif-asms",
+    default=str(C.dir("cif_asms")),
     show_default=True,
     help="Directory containing assembled CIFs.",
 )
@@ -274,7 +275,7 @@ def _compute_stats(s: pd.Series) -> str:
     "--out-csv",
     type=click.Path(path_type=Path, dir_okay=False),
     required=True,
-    default="data/pair-calls.csv",
+    default=str(C.file("pair_calls")),
     show_default=True,
     help="Output CSV file path for pair calls (e.g., pair_calls.csv).",
 )

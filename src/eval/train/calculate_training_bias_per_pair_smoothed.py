@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 from collections import defaultdict
 
+from utils._config import eval_cfg as E
+
 
 # Smoothing constant
 SMOOTHING_CONSTANT = 0.0
@@ -197,9 +199,9 @@ def calculate_bias_scores(valid_pairs_json, csv_path, memorization_base_dir, mod
 
 
 def main():
-    valid_pairs_json = "/home.galaxy4/seeun/works/projects/multi_bench/script_final/output/valid_pairs.json"
-    combinations_dir = "/home/bonjae02/projects/contest/curation/data/combinations-final"
-    memorization_base_dir = "/home/bonjae02/projects/contest/memorization_hits_intersection"
+    valid_pairs_json = str(E.file("valid_pairs"))
+    combinations_dir = str(E.external("combinations_dir") or "data/combinations-final")
+    memorization_base_dir = str(E.dir("memorization_hits_intersection"))
     
     # Threshold combinations to process
     threshold_combinations = [
@@ -273,7 +275,7 @@ def main():
                     print(f"    Pairs with no hits: {no_hits_count} ({no_hits_count/len(results)*100:.1f}%)")
             
             # Save combined results for this model and threshold
-            output_dir = f"/home/bonjae02/projects/contest/training_bias_smoothed/tm_{tm_threshold}_fident_{fident_threshold}"
+            output_dir = str(E.dir("training_bias"))
             os.makedirs(output_dir, exist_ok=True)
             output_path = os.path.join(output_dir, f"training_bias_per_pair_{model}.json")
             with open(output_path, 'w') as f:

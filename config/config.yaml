@@ -1,0 +1,116 @@
+# ProMiSE-bench path configuration.
+#
+# Usage:
+#   from utils._config import pipeline_cfg as C
+#   from utils._config import eval_cfg as E
+#
+#   C.dir("seqs")            -> Path("data/seqs")
+#   C.file("filtered_pairs") -> Path("data/filtered-pairs.csv")
+#   E.dir("training_bias")   -> Path("data_eval/train/training_bias")
+
+# =====================================================================
+# Curation pipeline
+# =====================================================================
+pipeline:
+  data_root: data
+  final_output: dataset-pipeline
+
+  # Directories that are cleaned up unless --keep-intermediates
+  intermediate:
+    - asms_raw
+    - asms_bio
+    - asms_subset
+    - asms_metal
+    - combinations
+    - combinations_filtered
+    - seqcluster_work
+
+  dirs:
+    # Phase 1: MSA / TM-score / clustering
+    seqs: seqs
+    msas: msas
+    coords: coords
+    missing: missing
+    scores: scores
+    clusters: clusters
+
+    # Phase 2: assembly curation
+    cif_asms: cif-asms
+    asms_raw: asms-raw
+    asms_bio: asms-bio
+    asms_subset: asms-subset
+    asms_metal: asms-metal
+
+    # Phase 3: pair extraction
+    combinations: combinations
+    combinations_filtered: combinations-filtered
+    seqcluster_work: seqcluster_work
+    dataset_pipeline: dataset-pipeline
+
+    # Misc
+    logs: logs
+
+  files:
+    filtered_pairs: filtered-pairs.csv
+    high_tm: high-tm-pairs.csv
+    pair_calls: pair-calls.csv
+    representative_sequences: representative_sequences.json
+    binding_site_compatibility: binding_site_compatibility.csv
+    excluded_ccd_codes: excluded_ccd_codes.txt
+    ligand_clusters: /home.galaxy4/seeun/works/projects/casp-pipe/data/cluster-lig_ccd/cutoff_0.4.json
+
+# =====================================================================
+# Evaluation
+# =====================================================================
+eval:
+  data_root: data_eval
+
+  dirs:
+    # train
+    train: train
+    training_bias: train/training_bias
+    memorization_hits_foldseek: train/memorization_hits_foldseek
+    memorization_hits_mmseqs: train/memorization_hits_mmseqs
+    memorization_hits_intersection: train/memorization_hits_intersection
+
+    # msa
+    msa: msa
+
+    # distogram
+    distogram: distogram
+
+    # output
+    output: output
+
+    # plot
+    plots: plots
+    filtered_pairs: filtered_pairs_msa_bias
+
+  files:
+    # core inputs
+    valid_pairs: valid_pairs.json
+    survived_clusters: survived_clusters_threshold60.json
+
+    # confbench scores
+    confbench_scores: confbench_scores_valid_pairs.json
+    confbench_distogram: confbench_scores_distogram.json
+
+    # msa preference
+    msa_pref_csv: per_pair_summary.csv
+
+    # merged outputs
+    merged_json: merged_valid_pairs_data.json
+    merged_csv: merged_valid_pairs_data.csv
+
+    # training bias per-model outputs
+    training_bias_af3: train/training_bias/training_bias_per_pair_af3.json
+    training_bias_boltz2: train/training_bias/training_bias_per_pair_boltz_2.json
+    training_bias_chai1: train/training_bias/training_bias_per_pair_chai_1.json
+    training_bias_bioemu: train/training_bias/training_bias_per_pair_bioemu.json
+
+  # External paths (machine-specific, override as needed)
+  external:
+    meta_data_dir: null       # e.g. /home.galaxy4/seeun/DB/RCSB/meta_data
+    combinations_dir: null    # e.g. data/combinations-final
+    foldseek_hits_dir: null   # e.g. /path/to/foldseek/out
+    mmseqs_hits_dir: null     # e.g. /path/to/mmseqs/out

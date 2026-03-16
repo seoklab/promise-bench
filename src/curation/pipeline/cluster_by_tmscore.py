@@ -8,8 +8,9 @@ from scipy.spatial import distance as D
 from sklearn.cluster import AgglomerativeClustering
 from tqdm import tqdm
 
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils.typedefs import TMScoreResult
-from ..utils._data_root import DataRootCommand
 
 
 def cluster_by_tmscore(
@@ -93,25 +94,25 @@ def cluster_by_tmscore(
 @click.option(
     "--clusters",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/clusters"),
+    default=C.dir("clusters"),
     show_default=True,
 )
 @click.option(
     "--filtered",
     type=click.Path(dir_okay=False, path_type=Path),
-    default=Path("data/filtered-pairs.csv"),
+    default=C.file("filtered_pairs"),
     show_default=True,
 )
 @click.option(
     "--high-tm",
     type=click.Path(dir_okay=False, path_type=Path),
-    default=Path("data/high-tm-pairs.csv"),
+    default=C.file("high_tm"),
     show_default=True,
 )
 @click.option(
     "--scores",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=Path("data/scores"),
+    default=C.dir("scores"),
     show_default=True,
 )
 def main(nproc: int, clusters: Path, filtered: Path, high_tm: Path, scores: Path):

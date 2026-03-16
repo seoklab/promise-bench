@@ -15,7 +15,8 @@ import parasail
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils.constants import _AA3, _NT
 
 DBG_DEFAULTS = {
@@ -609,18 +610,18 @@ def process_file(
     "--asm-bio-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=True,
-    default="data/asms-bio",
+    default=str(C.dir("asms_bio")),
 )
 @click.option(
     "--out-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=True,
-    default="data/asms-subset",
+    default=str(C.dir("asms_subset")),
 )
 @click.option(
     "--mmcif-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/cif-asms"),
+    default=C.dir("cif_asms"),
     help="Root containing assembly CIFs; tries <pdb>.cif or **/asm_<pdb>_*.cif, **/<pdb>/asm*.cif",
 )
 @click.option(

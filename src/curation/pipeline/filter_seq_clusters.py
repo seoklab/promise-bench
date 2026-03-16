@@ -9,7 +9,8 @@ from typing import Dict, List, Set, Tuple
 import click
 import pandas as pd
 
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from .types import DatasetPair
 
 
@@ -165,28 +166,28 @@ def process_category(
 @click.option(
     "--dataset-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=Path("data/combinations"),
+    default=C.dir("combinations"),
     show_default=True,
     help="Directory with pair CSVs.",
 )
 @click.option(
     "--rep-json",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
-    default=Path("data/representative_sequences.json"),
+    default=C.file("representative_sequences"),
     show_default=True,
     help="Representative sequences JSON from select_representative.py.",
 )
 @click.option(
     "--out-dir",
     type=click.Path(path_type=Path),
-    default=Path("data/dataset-pipeline"),
+    default=C.final_output_dir(),
     show_default=True,
     help="Output directory for the final filtered dataset.",
 )
 @click.option(
     "--work-dir",
     type=click.Path(path_type=Path),
-    default=Path("data/seqcluster_work"),
+    default=C.dir("seqcluster_work"),
     show_default=True,
     help="Working directory for FASTA / MMseqs2 files.",
 )

@@ -5,7 +5,8 @@ import click
 import numpy as np
 import pandas as pd
 
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from .types import DatasetPair, PairSide
 
 
@@ -446,7 +447,7 @@ def write_per_type(outdir: Path, accum: Dict[str, List[DatasetPair]]):
     type=click.Path(exists=True, file_okay=False),
     required=True,
     help="Root directory (e.g., asms-metal).",
-    default="data/asms-metal",
+    default=str(C.dir("asms_metal")),
 )
 @click.option(
     "--pattern",
@@ -457,7 +458,7 @@ def write_per_type(outdir: Path, accum: Dict[str, List[DatasetPair]]):
 @click.option(
     "--outdir",
     type=click.Path(dir_okay=True, file_okay=False, writable=True),
-    default="data/combinations",
+    default=str(C.dir("combinations")),
     show_default=True,
     help="Directory to write per-type CSV outputs.",
 )
@@ -471,7 +472,7 @@ def write_per_type(outdir: Path, accum: Dict[str, List[DatasetPair]]):
     "--tm-root",
     type=click.Path(exists=True, file_okay=False),
     required=True,
-    default="data/scores",
+    default=str(C.dir("scores")),
     show_default=True,
     help="Root dir with precomputed TM-score .npz files.",
 )
@@ -486,14 +487,14 @@ def write_per_type(outdir: Path, accum: Dict[str, List[DatasetPair]]):
     "--filtered-pairs",
     type=click.Path(exists=True, dir_okay=False),
     required=True,
-    default="data/filtered-pairs.csv",
+    default=str(C.file("filtered_pairs")),
     show_default=True,
     help="Only keep pairs listed in this filtered-pairs CSV.",
 )
 @click.option(
     "--coords-root",
     type=click.Path(exists=True, file_okay=False),
-    default="data/coords",
+    default=str(C.dir("coords")),
     show_default=True,
     help="Root dir with coords .npz files (for sequence length ratio filtering).",
 )

@@ -30,6 +30,8 @@ import numpy as np
 import click
 from collections import defaultdict
 
+from utils._config import eval_cfg as E
+
 
 # Model mapping
 MODELS = ['alphafold3', 'boltz1', 'boltz2', 'chai', 'bioemu']
@@ -489,25 +491,25 @@ def save_outputs(json_output, csv_rows, output_dir):
 
 @click.command()
 @click.option('--valid-pairs-json', type=click.Path(exists=True),
-              default='/home/bonjae02/projects/promise-bench/data_eval/valid_pairs.json',
+              default=str(E.file('valid_pairs')),
               show_default=True, help='Path to valid_pairs.json')
 @click.option('--confbench-json', type=click.Path(exists=True),
-              default='/home/bonjae02/projects/promise-bench/data_eval/confbench_scores_valid_pairs.json',
+              default=str(E.file('confbench_scores')),
               show_default=True, help='Path to confbench_scores_valid_pairs.json')
 @click.option('--confbench-distogram-json', type=click.Path(exists=True),
-              default='/home/bonjae02/projects/promise-bench/data_eval/confbench_scores_distogram.json',
+              default=str(E.file('confbench_distogram')),
               show_default=True, help='Path to confbench_scores_distogram.json')
 @click.option('--msa-pref-csv', type=click.Path(exists=True),
-              default='/home/bonjae02/projects/promise-bench/data_eval/per_pair_summary.csv',
+              default=str(E.file('msa_pref_csv')),
               show_default=True, help='Path to per_pair_summary.csv (MSA preference)')
 @click.option('--training-bias-dir', type=click.Path(exists=True, file_okay=False),
-              default='/home/bonjae02/projects/promise-bench/data_eval/train/training_bias',
+              default=str(E.dir('training_bias')),
               show_default=True, help='Directory containing training bias JSON files')
 @click.option('--survived-clusters-json', type=click.Path(exists=True),
-              default='/home/bonjae02/projects/promise-bench/data_eval/survived_clusters_threshold60.json',
+              default=str(E.file('survived_clusters')),
               show_default=True, help='Path to survived_clusters_threshold60.json')
 @click.option('--output-dir', type=click.Path(),
-              default='/home/bonjae02/projects/promise-bench/data_eval/output',
+              default=str(E.dir('output')),
               show_default=True, help='Output directory for merged results')
 def main(valid_pairs_json, confbench_json, confbench_distogram_json,
          msa_pref_csv, training_bias_dir, survived_clusters_json, output_dir):

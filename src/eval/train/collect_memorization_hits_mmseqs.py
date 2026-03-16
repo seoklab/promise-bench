@@ -16,11 +16,13 @@ import json
 from datetime import datetime
 from collections import defaultdict
 
-# Paths
-META_DATA_DIR = "/home.galaxy4/seeun/DB/RCSB/meta_data"
-CSV_DIR = "/home/bonjae02/projects/contest/curation/data/combinations-final"
-HITS_DIR = "/home/bonjae02/projects/contest/mmseqs/out"
-BASE_OUTPUT_DIR = "/home/bonjae02/projects/contest/memorization_hits_mmseqs"
+from utils._config import eval_cfg as E
+
+# Paths (from config)
+META_DATA_DIR = str(E.external("meta_data_dir") or "/home.galaxy4/seeun/DB/RCSB/meta_data")
+CSV_DIR = str(E.external("combinations_dir") or "data/combinations-final")
+HITS_DIR = str(E.external("mmseqs_hits_dir") or "mmseqs/out")
+BASE_OUTPUT_DIR = str(E.dir("memorization_hits_mmseqs"))
 
 # Cutoff dates for models
 CUTOFFS = {
