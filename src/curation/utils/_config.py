@@ -1,16 +1,19 @@
-"""Central pipeline path configuration.
+"""Central path configuration for both curation pipeline and evaluation.
 
-Loads ``config/pipeline.yaml`` once and exposes helpers for resolving
-directory and file paths relative to the data root (``data/``).
+Loads ``config/config.yaml`` once and exposes section-specific accessors
+for resolving directory and file paths relative to each section's data root.
 
-Typical usage in pipeline modules
----------------------------------
+Usage
+-----
 ::
 
     from curation.utils._config import pipeline_cfg as C
+    from curation.utils._config import eval_cfg as E
 
-    @click.option("--seqs", ..., default=C.dir("seqs"))      # Path("data/seqs")
-    @click.option("--out", ..., default=C.file("pair_calls")) # Path("data/pair-calls.csv")
+    C.dir("seqs")            # -> Path("data/seqs")
+    C.file("filtered_pairs") # -> Path("data/filtered-pairs.csv")
+    E.dir("training_bias")   # -> Path("data_eval/train/training_bias")
+    E.external("meta_data_dir")  # -> Path or None
 """
 
 from __future__ import annotations
@@ -28,99 +31,129 @@ import yaml
 # config/ lives at the repo root, next to src/
 # _config.py is at src/curation/utils/_config.py -> 3 parents up to repo root
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_CONFIG_PATH = _REPO_ROOT / "config" / "pipeline.yaml"
+_CONFIG_PATH = _REPO_ROOT / "config" / "config.yaml"
 
 
 @functools.lru_cache(maxsize=1)
-def _load() -> dict[str, Any]:
-    """Read and cache the pipeline YAML."""
+def _load_all() -> dict[str, Any]:
+    """Read and cache the full config YAML."""
     with open(_CONFIG_PATH) as fh:
-        return yaml.safe_load(fh)["pipeline"]
+        return yaml.safe_load(fh)
 
 
-# ---------------------------------------------------------------------------
-# Public helpers
-# ---------------------------------------------------------------------------
-
-_DATA_PREFIX = "data"
+# =====================================================================
+# Generic section accessor
+# =====================================================================
 
 
-def _data_root() -> str:
-    """Return the configured data root (default ``'data'``)."""
-    return _load().get("data_root", _DATA_PREFIX)
+class SectionConfig:
+    """Base accessor for a single top-level YAML section."""
 
+    def __init__(self, section: str, default_data_root: str) -> None:
+        self._section = section
+        self._default_data_root = default_data_root
 
-class PipelineConfig:
-    """Thin accessor around the YAML config dict."""
-
-    @staticmethod
-    def data_root() -> str:
-        """Configured data root directory name (e.g. ``'data'`` or ``'data-95'``)."""
-        return _data_root()
+    def _cfg(self) -> dict[str, Any]:
+        return _load_all()[self._section]
 
     # -- raw access --
 
-    @staticmethod
-    def raw() -> dict[str, Any]:
-        """Return the full ``pipeline:`` mapping."""
-        return _load()
+    def raw(self) -> dict[str, Any]:
+        """Return the full section mapping."""
+        return self._cfg()
+
+    # -- data root --
+
+    def data_root(self) -> str:
+        """Configured data root directory name."""
+        return self._cfg().get("data_root", self._default_data_root)
 
     # -- directory helpers --
 
-    @staticmethod
-    def dirname(key: str) -> str:
-        """Bare directory name, e.g. ``"asms-raw"``."""
-        return _load()["dirs"][key]
+    def dirname(self, key: str) -> str:
+        """Bare directory path segment, e.g. ``"asms-raw"``."""
+        return self._cfg()["dirs"][key]
 
-    @staticmethod
-    def dir(key: str) -> Path:
+    def dir(self, key: str) -> Path:
         """``Path("<data_root>/<dirname>")``, suitable as a Click default."""
-        return Path(_data_root()) / _load()["dirs"][key]
+        return Path(self.data_root()) / self._cfg()["dirs"][key]
 
     # -- file helpers --
 
-    @staticmethod
-    def filename(key: str) -> str:
-        """Bare file name, e.g. ``"pair-calls.csv"``."""
-        return _load()["files"][key]
+    def filename(self, key: str) -> str:
+        """Bare file path segment, e.g. ``"pair-calls.csv"``."""
+        return self._cfg()["files"][key]
 
-    @staticmethod
-    def file(key: str) -> Path | None:
+    def file(self, key: str) -> Path | None:
         """``Path("<data_root>/<filename>")`` or *None* if the value is null.
 
         If the configured value is an absolute path, it is returned as-is.
         """
-        val = _load()["files"][key]
+        val = self._cfg()["files"][key]
         if val is None:
             return None
         p = Path(val)
         if p.is_absolute():
             return p
-        return Path(_data_root()) / val
+        return Path(self.data_root()) / val
 
-    # -- special --
+    # -- external (machine-specific) paths --
 
-    @staticmethod
-    def final_output() -> str:
+    def external(self, key: str) -> Path | None:
+        """Return an external path or *None* if unset/null."""
+        val = self._cfg().get("external", {}).get(key)
+        if val is None:
+            return None
+        return Path(val)
+
+
+# =====================================================================
+# Pipeline-specific extensions
+# =====================================================================
+
+
+class PipelineConfig(SectionConfig):
+    """Pipeline accessor with extra helpers for final output / intermediates."""
+
+    def __init__(self) -> None:
+        super().__init__("pipeline", "data")
+
+    def final_output(self) -> str:
         """The final output directory name (bare)."""
-        return _load()["final_output"]
+        return self._cfg()["final_output"]
 
-    @staticmethod
-    def final_output_dir() -> Path:
+    def final_output_dir(self) -> Path:
         """``Path("<data_root>/<final_output>")``."""
-        return Path(_data_root()) / _load()["final_output"]
+        return Path(self.data_root()) / self._cfg()["final_output"]
 
-    @staticmethod
-    def intermediate_keys() -> list[str]:
+    def intermediate_keys(self) -> list[str]:
         """Config keys of directories that are intermediate artefacts."""
-        return _load()["intermediate"]
+        return self._cfg()["intermediate"]
 
-    @staticmethod
-    def intermediate_dirs() -> set[str]:
+    def intermediate_dirs(self) -> set[str]:
         """Set of bare directory names that are intermediate artefacts."""
-        cfg = _load()
+        cfg = self._cfg()
         return {cfg["dirs"][k] for k in cfg["intermediate"]}
 
 
-# Singleton instance — import as ``from curation.utils._config import pipeline_cfg as C``
+# =====================================================================
+# Eval accessor
+# =====================================================================
+
+
+class EvalConfig(SectionConfig):
+    """Eval accessor — no extra methods beyond the base."""
+
+    def __init__(self) -> None:
+        super().__init__("eval", "data_eval")
+
+
+# =====================================================================
+# Singleton instances
+# =====================================================================
+
+# Curation pipeline: ``from curation.utils._config import pipeline_cfg as C``
 pipeline_cfg = PipelineConfig()
+
+# Evaluation: ``from curation.utils._config import eval_cfg as E``
+eval_cfg = EvalConfig()

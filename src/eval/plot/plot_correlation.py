@@ -11,7 +11,7 @@ from pathlib import Path
 from scipy.stats import pearsonr, spearmanr
 import matplotlib.cm as cm
 
-from eval._config import eval_cfg as E
+from curation.utils._config import eval_cfg as E
 
 # Mode: Set to True to only generate 4-panel plot, False to generate all plots
 ONLY_4PANEL = True

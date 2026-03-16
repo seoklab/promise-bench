@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from collections import defaultdict
 
-from eval._config import eval_cfg as E
+from curation.utils._config import eval_cfg as E
 
 
 # Smoothing constant
