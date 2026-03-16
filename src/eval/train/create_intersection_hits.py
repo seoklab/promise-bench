@@ -12,11 +12,12 @@ import os
 import sys
 from collections import defaultdict
 
-# Paths
-BASE_DIR = "/home/bonjae02/projects/contest"
-FOLDSEEK_BASE = os.path.join(BASE_DIR, "memorization_hits_foldseek")
-MMSEQS_BASE = os.path.join(BASE_DIR, "memorization_hits_mmseqs")
-OUTPUT_BASE = os.path.join(BASE_DIR, "memorization_hits_intersection")
+from eval._config import eval_cfg as E
+
+# Paths (from config)
+FOLDSEEK_BASE = str(E.dir("memorization_hits_foldseek"))
+MMSEQS_BASE = str(E.dir("memorization_hits_mmseqs"))
+OUTPUT_BASE = str(E.dir("memorization_hits_intersection"))
 
 # Models
 MODELS = ["bioemu"]
