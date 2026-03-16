@@ -17,6 +17,7 @@ from ..utils.constants import (
     LIGAND_EXCLUDE,
     NUCLEOTIDE_3C,
 )
+from ..utils._config import pipeline_cfg as C
 from ..utils._data_root import DataRootCommand
 from ..utils._geometry import coords_and_ligs_from_model, get_contact_chains, get_contact_ligands
 from ..utils._pdb_helpers import check_auth_base, label_base, parse_member_cell
@@ -399,7 +400,7 @@ def process_cluster_file(
     "--clusters-root",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
     required=True,
-    default="data/clusters",
+    default=str(C.dir("clusters")),
     show_default=True,
     help="Root directory of cluster CSV files.",
 )
@@ -407,13 +408,13 @@ def process_cluster_file(
     "--out-root",
     type=click.Path(path_type=Path, file_okay=False),
     required=True,
-    default="data/asms-raw",
+    default=str(C.dir("asms_raw")),
 )
 @click.option("--save-assemblies", default=True, show_default=True)
 @click.option(
     "--save-assemblies-dir",
     type=click.Path(path_type=Path, file_okay=False),
-    default="data/cif-asms",
+    default=str(C.dir("cif_asms")),
 )
 @click.option("--max-polymer-instances", type=int, default=12)
 @click.option("--max-lig-instances", type=int, default=12)
@@ -428,7 +429,7 @@ def process_cluster_file(
     "--centers-file",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     required=True,
-    default="data/filtered-pairs.csv",
+    default=str(C.file("filtered_pairs")),
     show_default=True,
     help="CSV with cluster centers / chain pairs.",
 )

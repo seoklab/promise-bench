@@ -12,6 +12,7 @@ from Bio.PDB.MMCIFParser import MMCIFParser
 from joblib import Parallel, delayed
 from scipy.spatial import cKDTree
 
+from ..utils._config import pipeline_cfg as C
 from ..utils._data_root import DataRootCommand
 
 _METAL_ELEMENTS = ["MG", "ZN", "MN", "CA", "FE", "NI", "CO", "CU", "K", "NA", "HG", "CD", "SR", "BA", "AL", "TI", "V", "CR", "MO", "W"]
@@ -268,18 +269,18 @@ def process_cluster(
     "--in-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=True,
-    default="data/asms-subset",
+    default=str(C.dir("asms_subset")),
 )
 @click.option(
     "--out-dir",
     type=click.Path(file_okay=False, path_type=Path),
     required=True,
-    default="data/asms-metal",
+    default=str(C.dir("asms_metal")),
 )
 @click.option(
     "--mmcif-dir",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/cif-asms"),
+    default=C.dir("cif_asms"),
     help="Root containing assembly CIFs.",
 )
 @click.option("--workers", type=int, default=32, help="Parallel workers.")

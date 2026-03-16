@@ -22,6 +22,7 @@ from pydantic import (
 )
 from tqdm import tqdm
 
+from ..utils._config import pipeline_cfg as C
 from ..utils._data_root import DataRootCommand
 from ..utils.typedefs import GroupSet
 
@@ -336,25 +337,25 @@ def msa_align_coords(
 @click.option(
     "--seqs",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/seqs"),
+    default=C.dir("seqs"),
     show_default=True,
 )
 @click.option(
     "--msas",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/msas"),
+    default=C.dir("msas"),
     show_default=True,
 )
 @click.option(
     "--coords",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/coords"),
+    default=C.dir("coords"),
     show_default=True,
 )
 @click.option(
     "--missing",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/missing"),
+    default=C.dir("missing"),
     show_default=True,
 )
 @click.argument(

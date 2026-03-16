@@ -24,6 +24,8 @@ from typing import Optional
 
 import click
 
+from curation.utils._config import pipeline_cfg as C
+
 # ---------------------------------------------------------------------------
 # Step registry
 # ---------------------------------------------------------------------------
@@ -31,18 +33,10 @@ import click
 # Directories inside ``data/`` that are intermediate artefacts.
 # They will be written to tmpdir and cleaned up unless the user
 # explicitly requests keeping them.
-INTERMEDIATE_DIRS: set[str] = {
-    "asms-raw",
-    "asms-bio",
-    "asms-subset",
-    "asms-metal",
-    "combinations",
-    "combinations-filtered",
-    "seqcluster_work",
-}
+INTERMEDIATE_DIRS: set[str] = C.intermediate_dirs()
 
 # Final output directory name (replaces "combinations-seqfiltered")
-FINAL_OUTPUT_DIR = "dataset-pipeline"
+FINAL_OUTPUT_DIR = C.final_output()
 
 
 class Step:
@@ -133,9 +127,9 @@ STEPS: list[Step] = [
             "--mmcif-dir",
             str(m),
             "--out-root",
-            _d(d, t, "asms-raw"),
+            _d(d, t, C.dirname("asms_raw")),
             "--save-assemblies-dir",
-            str(d / "cif-asms"),  # always keep
+            str(d / C.dirname("cif_asms")),  # always keep
         ],
     ),
     Step(
@@ -143,9 +137,9 @@ STEPS: list[Step] = [
         "curation.pipeline.run_prodigy",
         args_fn=lambda s, m, w, d, t: [
             "--raw-dir",
-            _d(d, t, "asms-raw"),
+            _d(d, t, C.dirname("asms_raw")),
             "--out-csv",
-            _f(d, t, "pair-calls.csv"),
+            _f(d, t, C.filename("pair_calls")),
         ],
     ),
     Step(
@@ -153,11 +147,11 @@ STEPS: list[Step] = [
         "curation.pipeline.filter_xtal",
         args_fn=lambda s, m, w, d, t: [
             "--asm-raw-dir",
-            _d(d, t, "asms-raw"),
+            _d(d, t, C.dirname("asms_raw")),
             "--out-dir",
-            _d(d, t, "asms-bio"),
+            _d(d, t, C.dirname("asms_bio")),
             "--pair-calls-csv",
-            _f(d, t, "pair-calls.csv"),
+            _f(d, t, C.filename("pair_calls")),
         ],
     ),
     Step(
@@ -165,9 +159,9 @@ STEPS: list[Step] = [
         "curation.pipeline.subsets",
         args_fn=lambda s, m, w, d, t: [
             "--asm-bio-dir",
-            _d(d, t, "asms-bio"),
+            _d(d, t, C.dirname("asms_bio")),
             "--out-dir",
-            _d(d, t, "asms-subset"),
+            _d(d, t, C.dirname("asms_subset")),
         ],
     ),
     Step(
@@ -175,9 +169,9 @@ STEPS: list[Step] = [
         "curation.pipeline.process_metal",
         args_fn=lambda s, m, w, d, t: [
             "--in-dir",
-            _d(d, t, "asms-subset"),
+            _d(d, t, C.dirname("asms_subset")),
             "--out-dir",
-            _d(d, t, "asms-metal"),
+            _d(d, t, C.dirname("asms_metal")),
         ],
     ),
     Step(
@@ -186,11 +180,11 @@ STEPS: list[Step] = [
         entry="cli",
         args_fn=lambda s, m, w, d, t: [
             "--filtered-dir",
-            _d(d, t, "asms-metal"),
+            _d(d, t, C.dirname("asms_metal")),
             "--outdir",
-            _d(d, t, "combinations"),
+            _d(d, t, C.dirname("combinations")),
             "--filtered-pairs",
-            _f(d, t, "filtered-pairs.csv"),
+            _f(d, t, C.filename("filtered_pairs")),
         ],
     ),
     Step(
@@ -198,9 +192,9 @@ STEPS: list[Step] = [
         "curation.pipeline.select_representative",
         args_fn=lambda s, m, w, d, t: [
             "--dataset-dir",
-            _d(d, t, "combinations"),
+            _d(d, t, C.dirname("combinations")),
             "--out-dataset",
-            _d(d, t, "combinations-filtered"),
+            _d(d, t, C.dirname("combinations_filtered")),
         ],
     ),
     Step(
@@ -208,11 +202,11 @@ STEPS: list[Step] = [
         "curation.pipeline.filter_seq_clusters",
         args_fn=lambda s, m, w, d, t: [
             "--dataset-dir",
-            _d(d, t, "combinations"),
+            _d(d, t, C.dirname("combinations")),
             "--out-dir",
             str(d / FINAL_OUTPUT_DIR),
             "--work-dir",
-            _d(d, t, "seqcluster_work"),
+            _d(d, t, C.dirname("seqcluster_work")),
         ],
     ),
     Step(

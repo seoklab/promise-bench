@@ -12,6 +12,7 @@ import pandas as pd
 from Bio.PDB import MMCIFParser, NeighborSearch
 from joblib import Parallel, delayed
 
+from ..utils._config import pipeline_cfg as C
 from ..utils._data_root import DataRootCommand
 from ..utils.constants import AA_3TO1
 from .types import DatasetPair
@@ -494,7 +495,7 @@ def _collect_entries(dataset_dir: Path) -> Dict[str, List[dict]]:
 @click.option(
     "--dataset-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=Path("data/combinations"),
+    default=C.dir("combinations"),
     show_default=True,
     help="Directory with pair CSVs (curate_sets output).",
 )
@@ -502,35 +503,35 @@ def _collect_entries(dataset_dir: Path) -> Dict[str, List[dict]]:
     "--msa-root",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
     required=True,
-    default=Path("data/msas"),
+    default=C.dir("msas"),
     show_default=True,
     help="Root of MSA a3m files.",
 )
 @click.option(
     "--cif-root",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default=Path("data/cif-asms"),
+    default=C.dir("cif_asms"),
     show_default=True,
     help="Root of assembly CIF files.",
 )
 @click.option(
     "--out-json",
     type=click.Path(path_type=Path),
-    default=Path("data/representative_sequences.json"),
+    default=C.file("representative_sequences"),
     show_default=True,
     help="Output representative sequences JSON.",
 )
 @click.option(
     "--out-compat-csv",
     type=click.Path(path_type=Path),
-    default=Path("data/binding_site_compatibility.csv"),
+    default=C.file("binding_site_compatibility"),
     show_default=True,
     help="Per-entry compatibility CSV.",
 )
 @click.option(
     "--out-dataset",
     type=click.Path(path_type=Path),
-    default=Path("data/combinations-filtered"),
+    default=C.dir("combinations_filtered"),
     show_default=True,
     help="Output directory for filtered pair CSVs.",
 )

@@ -12,6 +12,7 @@ from nuri.tools import tm
 from nuri.tools.chimera import match_maker
 from tqdm import tqdm
 
+from ..utils._config import pipeline_cfg as C
 from ..utils._data_root import DataRootCommand
 from ..utils.typedefs import TMScoreResult
 
@@ -147,13 +148,13 @@ def run_tmscore_parallel(
 @click.option(
     "--scores",
     type=click.Path(file_okay=False, path_type=Path),
-    default=Path("data/scores"),
+    default=C.dir("scores"),
     show_default=True,
 )
 @click.argument(
     "coords",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default="data/coords",
+    default=str(C.dir("coords")),
 )
 def main(nproc: int, scores: Path, coords: Path):
     for key in [
