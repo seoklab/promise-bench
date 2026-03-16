@@ -1,10 +1,12 @@
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import click
 import numpy as np
 import pandas as pd
+
+from ..utils._data_root import DataRootCommand
+from .types import DatasetPair, PairSide
 
 
 def _s(x) -> str:
@@ -34,28 +36,27 @@ def _pair(rows_a: pd.DataFrame, rows_b: pd.DataFrame):
             yield ra, rb
 
 
-def emit_min_row(cluster_csv: str, ra: pd.Series, rb: pd.Series) -> Dict[str, Any]:
-    return {
-        "cluster_csv": cluster_csv[0:9],
-        "a_pdb": _s(ra.get("pdb")),
-        "a_assembly_id": _s(ra.get("assembly_id")),
-        "a_chain": _s(ra.get("chain_auth_asm")),
-        "a_conf_label": ra.get("conf_label"),
-        "a_chains": _s(ra.get("chain_list_author")),
-        "a_contact_chains": _s(ra.get("contact_chains", "")),
-        "a_ligand_list": _s(ra.get("ligands", "")),
-        "a_contact_ligands": _s(ra.get("contact_ligands", "")),
-        "b_pdb": _s(rb.get("pdb")),
-        "b_assembly_id": _s(rb.get("assembly_id")),
-        "b_chain": _s(rb.get("chain_auth_asm")),
-        "b_conf_label": rb.get("conf_label"),
-        "b_chains": _s(rb.get("chain_list_author")),
-        "b_contact_chains": _s(rb.get("contact_chains", "")),
-        "b_ligand_list": _s(rb.get("ligands", "")),
-        "b_contact_ligands": _s(rb.get("contact_ligands", "")),
-        "a_desc": _s(ra.get("desc", "")),
-        "b_desc": _s(rb.get("desc", "")),
-    }
+def _make_pair_side(row: pd.Series) -> PairSide:
+    """Build a PairSide from an assembly-entry DataFrame row."""
+    return PairSide(
+        pdb=_s(row.get("pdb")),
+        assembly_id=_s(row.get("assembly_id")),
+        chain=_s(row.get("chain_auth_asm")),
+        conf_label=row.get("conf_label", 0),
+        chains=_s(row.get("chain_list_author")),
+        contact_chains=_s(row.get("contact_chains", "")),
+        ligand_list=_s(row.get("ligands", "")),
+        contact_ligands=_s(row.get("contact_ligands", "")),
+        desc=_s(row.get("desc", "")),
+    )
+
+
+def emit_min_row(cluster_csv: str, ra: pd.Series, rb: pd.Series) -> DatasetPair:
+    return DatasetPair(
+        cluster_csv=cluster_csv[0:9],
+        a=_make_pair_side(ra),
+        b=_make_pair_side(rb),
+    )
 
 
 def normalize_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
@@ -99,11 +100,12 @@ def _condensed_index(n: int, i: int, j: int) -> int:
 
 
 _tm_cache: Dict[str, Any] = {}
+_seq_len_cache: Dict[str, Optional[Dict[str, int]]] = {}
 
 
-def _get_tm_score(pair: Dict[str, Any], tm_root: Path) -> Optional[float]:
+def _get_tm_score(pair: DatasetPair, tm_root: Path) -> Optional[float]:
     """Look up pairwise TM-score from precomputed .npz file."""
-    cluster_key = str(pair.get("cluster_csv", ""))
+    cluster_key = pair.cluster_csv
     if cluster_key not in _tm_cache:
         tm_path = tm_root / f"{cluster_key}.npz"
         if tm_path.exists():
@@ -117,13 +119,8 @@ def _get_tm_score(pair: Dict[str, Any], tm_root: Path) -> Optional[float]:
         return None
 
     chains, tm_scores = cached
-    pdb_a = str(pair.get("a_pdb", "")).strip().lower()
-    coi_a = re.sub(r"\d+$", "", str(pair.get("a_chain", "")).strip())
-    chain_a = f"{pdb_a}_{coi_a.upper()}"
-
-    pdb_b = str(pair.get("b_pdb", "")).strip().lower()
-    coi_b = re.sub(r"\d+$", "", str(pair.get("b_chain", "")).strip())
-    chain_b = f"{pdb_b}_{coi_b.upper()}"
+    chain_a = f"{pair.a.pdb.lower()}_{pair.a.chain_letter.upper()}"
+    chain_b = f"{pair.b.pdb.lower()}_{pair.b.chain_letter.upper()}"
 
     idx_a = np.where(chains == chain_a)[0]
     idx_b = np.where(chains == chain_b)[0]
@@ -135,6 +132,93 @@ def _get_tm_score(pair: Dict[str, Any], tm_root: Path) -> Optional[float]:
         return float(tm_scores[pidx])
     except (ValueError, IndexError):
         return None
+
+
+def _get_seq_lengths(cluster_key: str, coords_root: Path) -> Optional[Dict[str, int]]:
+    """Load per-chain sequence lengths from coords npz (includes missing residues)."""
+    if cluster_key not in _seq_len_cache:
+        coords_path = coords_root / f"{cluster_key}.npz"
+        if coords_path.exists():
+            data = np.load(coords_path, allow_pickle=True)["coords"]
+            lengths: Dict[str, int] = {}
+            for entry in data:
+                if len(entry) == 4:
+                    name, _, _, seq_len = entry
+                    lengths[str(name)] = int(seq_len)
+                else:
+                    name, _, align_map = entry
+                    lengths[str(name)] = len(align_map)
+            _seq_len_cache[cluster_key] = lengths
+        else:
+            _seq_len_cache[cluster_key] = None
+    return _seq_len_cache.get(cluster_key)
+
+
+def _passes_length_ratio(
+    pair: DatasetPair, coords_root: Path, max_ratio: float = 1.5
+) -> bool:
+    """Return True if the pair's sequence length ratio is within max_ratio."""
+    lengths = _get_seq_lengths(pair.cluster_csv, coords_root)
+    if lengths is None:
+        return True  # can't check → keep
+
+    chain_a = f"{pair.a.pdb.lower()}_{pair.a.chain_letter.upper()}"
+    chain_b = f"{pair.b.pdb.lower()}_{pair.b.chain_letter.upper()}"
+
+    len_a = lengths.get(chain_a)
+    len_b = lengths.get(chain_b)
+    if len_a is None or len_b is None:
+        return True
+
+    short, long = sorted((len_a, len_b))
+    if short == 0:
+        return False
+    return (long / short) <= max_ratio
+
+
+def _norm_chain_id(raw: Any) -> str:
+    s = _s(raw).strip()
+    if not s:
+        return ""
+    if "_" not in s:
+        return s.lower()
+    pdb, chain = s.rsplit("_", 1)
+    return f"{pdb.lower()}_{chain.upper()}"
+
+
+def _pair_key(center: str, chain_a: str, chain_b: str) -> tuple[str, str, str]:
+    a, b = sorted((_norm_chain_id(chain_a), _norm_chain_id(chain_b)))
+    return center.lower(), a, b
+
+
+def load_filtered_pair_keys(path: Path) -> set[tuple[str, str, str]]:
+    if not path.exists() or path.stat().st_size == 0:
+        return set()
+
+    df = pd.read_csv(path)
+    if df.empty:
+        return set()
+
+    required = {"center", "chain-x", "chain-y"}
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"{path}: missing columns {missing}")
+
+    return {
+        _pair_key(row["center"], row["chain-x"], row["chain-y"])
+        for _, row in df.iterrows()
+    }
+
+
+def _is_in_filtered_pairs(
+    pair: DatasetPair, allowed_pair_keys: set[tuple[str, str, str]]
+) -> bool:
+    key = _pair_key(
+        pair.cluster_stem,
+        f"{pair.a.pdb.lower()}_{pair.a.chain_letter.upper()}",
+        f"{pair.b.pdb.lower()}_{pair.b.chain_letter.upper()}",
+    )
+    return key in allowed_pair_keys
 
 
 # ---------- Pair Finders (FILE-LEVEL) ----------
@@ -289,6 +373,9 @@ def process_file(
     root: Path,
     tm_root: Optional[Path] = None,
     tm_cutoff: float = 0.8,
+    allowed_pair_keys: Optional[set[tuple[str, str, str]]] = None,
+    coords_root: Optional[Path] = None,
+    max_length_ratio: float = 1.5,
 ):
     df_raw = pd.read_csv(fpath)
     if df_raw.empty:
@@ -302,7 +389,7 @@ def process_file(
     cluster_csv = fpath.relative_to(root).as_posix()
 
     # pairs
-    buckets: Dict[str, List[Dict[str, Any]]] = {c: [] for c in combos}
+    buckets: Dict[str, List[DatasetPair]] = {c: [] for c in combos}
     for name in combos:
         buckets[name] += COMBOS[name](df, cluster_csv)
 
@@ -312,26 +399,48 @@ def process_file(
             filtered = []
             for pair in buckets[name]:
                 score = _get_tm_score(pair, tm_root)
-                pair["tm_score"] = score
+                pair.tm_score = score
                 if score is not None and score > tm_cutoff:
                     continue  # too similar -> drop
                 filtered.append(pair)
             buckets[name] = filtered
 
+    # Sequence length ratio filtering
+    if coords_root is not None:
+        for name in combos:
+            buckets[name] = [
+                pair
+                for pair in buckets[name]
+                if _passes_length_ratio(pair, coords_root, max_length_ratio)
+            ]
+
+    # Keep only pairs that exist in filtered-pairs.csv
+    if allowed_pair_keys is not None:
+        for name in combos:
+            buckets[name] = [
+                pair
+                for pair in buckets[name]
+                if _is_in_filtered_pairs(pair, allowed_pair_keys)
+            ]
+
     return buckets
 
 
-def write_per_type(outdir: Path, accum: Dict[str, List[Dict[str, Any]]]):
+def write_per_type(outdir: Path, accum: Dict[str, List[DatasetPair]]):
     outdir.mkdir(parents=True, exist_ok=True)
-    for name, rows in accum.items():
+    for name, pairs in accum.items():
         out_path = outdir / f"{name}.csv"
-        if not rows:
+        if not pairs:
             out_path.write_text("")
         else:
-            pd.DataFrame(rows).drop_duplicates().to_csv(out_path, index=False)
+            DatasetPair.to_dataframe(pairs).drop_duplicates().to_csv(
+                out_path, index=False
+            )
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.command(
+    cls=DataRootCommand, context_settings=dict(help_option_names=["-h", "--help"])
+)
 @click.option(
     "--filtered-dir",
     type=click.Path(exists=True, file_okay=False),
@@ -373,14 +482,45 @@ def write_per_type(outdir: Path, accum: Dict[str, List[Dict[str, Any]]]):
     show_default=True,
     help="Drop pairs with TM-score above this threshold (too structurally similar).",
 )
-def cli(filtered_dir, pattern, outdir, combos, tm_root, tm_cutoff):
+@click.option(
+    "--filtered-pairs",
+    type=click.Path(exists=True, dir_okay=False),
+    required=True,
+    default="data/filtered-pairs.csv",
+    show_default=True,
+    help="Only keep pairs listed in this filtered-pairs CSV.",
+)
+@click.option(
+    "--coords-root",
+    type=click.Path(exists=True, file_okay=False),
+    default="data/coords",
+    show_default=True,
+    help="Root dir with coords .npz files (for sequence length ratio filtering).",
+)
+@click.option(
+    "--max-length-ratio",
+    type=float,
+    default=1.5,
+    show_default=True,
+    help="Exclude pairs whose longer/shorter sequence length ratio exceeds this.",
+)
+def cli(filtered_dir, pattern, outdir, combos, tm_root, tm_cutoff, filtered_pairs, coords_root, max_length_ratio):
     combos = list(combos) if combos else list(COMBOS.keys())
     root = Path(filtered_dir)
     tm_root_p = Path(tm_root) if tm_root else None
+    allowed_pair_keys = load_filtered_pair_keys(Path(filtered_pairs))
+    coords_root_p = Path(coords_root) if coords_root else None
     files = sorted(root.rglob(pattern))
 
     if tm_root_p:
         click.echo(f"[tm] Filtering pairs with TM > {tm_cutoff} using {tm_root_p}")
+    if coords_root_p:
+        click.echo(
+            f"[length] Excluding pairs with length ratio > {max_length_ratio}"
+        )
+    click.echo(
+        f"[filtered-pairs] Keeping only listed pairs from {filtered_pairs}"
+    )
 
     global_pairs = {c: [] for c in combos}
     processed = 0
@@ -388,7 +528,14 @@ def cli(filtered_dir, pattern, outdir, combos, tm_root, tm_cutoff):
     for f in files:
         try:
             buckets = process_file(
-                f, combos, root, tm_root=tm_root_p, tm_cutoff=tm_cutoff
+                f,
+                combos,
+                root,
+                tm_root=tm_root_p,
+                tm_cutoff=tm_cutoff,
+                allowed_pair_keys=allowed_pair_keys,
+                coords_root=coords_root_p,
+                max_length_ratio=max_length_ratio,
             )
             processed += 1
             for c in combos:

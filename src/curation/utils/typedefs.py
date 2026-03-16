@@ -25,3 +25,4 @@ class GroupSet(LooseModel):
 class TMScoreResult:
     chains: np.ndarray
     tm_scores: np.ndarray
+    rmsds: np.ndarray

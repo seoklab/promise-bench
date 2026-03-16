@@ -12,7 +12,9 @@ import pandas as pd
 from Bio.PDB import MMCIFParser, NeighborSearch
 from joblib import Parallel, delayed
 
+from ..utils._data_root import DataRootCommand
 from ..utils.constants import AA_3TO1
+from .types import DatasetPair
 
 CONTACT_DISTANCE = 5.0
 
@@ -319,6 +321,12 @@ def _process_cluster(
             entries.append(e)
             continue
 
+        # Drop entries with modified (non-standard) residues in binding site
+        if any(aa == "X" for aa in all_bs_aa.values()):
+            e.error = "modified_residue_in_bs"
+            entries.append(e)
+            continue
+
         # Map resnums to MSA columns
         struct_seq, struct_resnums = _get_chain_seq(cif_path, chain_asm)
         if not struct_seq:
@@ -437,31 +445,23 @@ def _collect_entries(dataset_dir: Path) -> Dict[str, List[dict]]:
 
     for csv_path in sorted(dataset_dir.glob("*.csv")):
         try:
-            df = pd.read_csv(csv_path)
+            pairs = DatasetPair.load_csv(csv_path)
         except Exception:
             continue
-        if df.empty:
+        if not pairs:
             continue
 
-        # Need cluster_csv column (curate_sets output)
-        if "cluster_csv" not in df.columns:
-            continue
-
-        for _, row in df.iterrows():
-            # cluster_csv looks like "A2/8A27_1"; extract stem
-            cluster_raw = _clean(str(row["cluster_csv"]))
-            cluster_stem = (
-                cluster_raw.split("/")[-1] if "/" in cluster_raw else cluster_raw
-            )
+        for pair in pairs:
+            cluster_stem = pair.cluster_stem
             if not cluster_stem:
                 continue
 
-            for side in ("a", "b"):
-                pdb = _clean(str(row.get(f"{side}_pdb", ""))).lower()
-                asm = _clean(str(row.get(f"{side}_assembly_id", "")))
-                chain = _clean(str(row.get(f"{side}_chain", "")))
-                cc = _clean(str(row.get(f"{side}_contact_chains", "")))
-                cl = _clean(str(row.get(f"{side}_contact_ligands", "")))
+            for side in (pair.a, pair.b):
+                pdb = side.pdb.lower()
+                asm = side.assembly_id
+                chain = side.chain
+                cc = side.contact_chains
+                cl = side.contact_ligands
                 if not pdb or not chain:
                     continue
 
@@ -488,7 +488,9 @@ def _collect_entries(dataset_dir: Path) -> Dict[str, List[dict]]:
     return {stem: list(entries.values()) for stem, entries in cluster_entries.items()}
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.command(
+    cls=DataRootCommand, context_settings={"help_option_names": ["-h", "--help"]}
+)
 @click.option(
     "--dataset-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
@@ -609,46 +611,31 @@ def main(
 
     for ds in sorted(dataset_dir.glob("*.csv")):
         try:
-            df = pd.read_csv(ds)
+            pairs = DatasetPair.load_csv(ds)
         except Exception:
             continue
-        if "cluster_csv" not in df.columns:
-            continue
-        if df.empty:
-            df.to_csv(out_dataset / ds.name, index=False)
+        if not pairs:
+            DatasetPair.save_csv([], out_dataset / ds.name)
             continue
 
-        n_before = len(df)
+        n_before = len(pairs)
+        kept: list[DatasetPair] = []
 
-        def _entry_key(row, side: str) -> str:
-            p = _clean(str(row[f"{side}_pdb"])).lower()
-            a = _clean(str(row[f"{side}_assembly_id"]))
-            c = _clean(str(row[f"{side}_chain"]))
-            # key uses chain_letter (strip trailing digits)
-            cl = re.match(r"([A-Za-z]+)", c)
-            cl = cl.group(1) if cl else c
-            return f"{p}_{a}_{cl}"
-
-        keep = []
-        for idx, row in df.iterrows():
-            cluster_raw = _clean(str(row["cluster_csv"]))
-            cluster_stem = (
-                cluster_raw.split("/")[-1] if "/" in cluster_raw else cluster_raw
-            )
-            if cluster_stem not in cluster_incompat:
-                keep.append(idx)
+        for pair in pairs:
+            stem = pair.cluster_stem
+            if stem not in cluster_incompat:
+                kept.append(pair)
                 continue
-            bad = cluster_incompat[cluster_stem]
-            ka = _entry_key(row, "a")
-            kb = _entry_key(row, "b")
+            bad = cluster_incompat[stem]
+            ka = f"{pair.a.pdb.lower()}_{pair.a.assembly_id}_{pair.a.chain_letter}"
+            kb = f"{pair.b.pdb.lower()}_{pair.b.assembly_id}_{pair.b.chain_letter}"
             if ka not in bad and kb not in bad:
-                keep.append(idx)
+                kept.append(pair)
 
-        df_out = df.loc[keep]
-        df_out.to_csv(out_dataset / ds.name, index=False)
+        DatasetPair.save_csv(kept, out_dataset / ds.name)
         click.echo(
-            f"  {ds.name}: {n_before} -> {len(df_out)} pairs  "
-            f"(dropped {n_before - len(df_out)})"
+            f"  {ds.name}: {n_before} -> {len(kept)} pairs  "
+            f"(dropped {n_before - len(kept)})"
         )
 
     click.echo("Done.")

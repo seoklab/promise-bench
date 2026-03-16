@@ -15,6 +15,7 @@ import parasail
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
+from ..utils._data_root import DataRootCommand
 from ..utils.constants import _AA3, _NT
 
 DBG_DEFAULTS = {
@@ -603,7 +604,7 @@ def process_file(
     }
 
 
-@click.command(context_settings=dict(show_default=True))
+@click.command(cls=DataRootCommand, context_settings=dict(show_default=True))
 @click.option(
     "--asm-bio-dir",
     type=click.Path(file_okay=False, path_type=Path),

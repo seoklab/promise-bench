@@ -1,5 +1,7 @@
 import logging
 import subprocess as sp
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
@@ -9,6 +11,7 @@ import click
 import numpy as np
 import nuri
 from joblib import Parallel, delayed
+from nuri import fmt
 from nuri.core import SubstructureCategory as Cat
 from pydantic import (
     BaseModel,
@@ -19,6 +22,7 @@ from pydantic import (
 )
 from tqdm import tqdm
 
+from ..utils._data_root import DataRootCommand
 from ..utils.typedefs import GroupSet
 
 
@@ -56,30 +60,37 @@ class ClusterMember:
     @classmethod
     def from_member_spec(
         cls, spec: str, onerror: list[str], mmcif_dir: Path = Path(".")
-    ):
-        from nuri.fmt import cif_ddl2_frame_as_dict, read_cif
-
-        pdb_id, entity_id = spec.split("_")
+    ) -> list["ClusterMember"]:
+        pdb_id, entity_idx_str = spec.split("_")
         pdb_id = pdb_id.lower()
 
         try:
-            frame = next(read_cif(str(mmcif_dir / f"{pdb_id}.cif"))).data
+            frame = next(
+                fmt.read_cif(str(mmcif_dir / f"{pdb_id}.cif"))
+            ).data
         except FileNotFoundError:
             onerror.append(spec)
-            return None
+            return []
 
-        mmcif = cif_ddl2_frame_as_dict(frame)
+        mmcif = fmt.cif_ddl2_frame_as_dict(frame)
+
+        # The FASTA was built from pdb_seqres.txt (protein-only),
+        # numbering unique protein sequences per PDB sequentially.
+        # Protein-NA complexes are filtered out upstream, so for
+        # remaining protein-only PDBs the sequential index equals
+        # the CIF entity_id.
+        entity_id = entity_idx_str
 
         try:
-            chain_id = entity_find_chain_one(mmcif, entity_id)
+            chain_ids = entity_find_chain_all(mmcif, entity_id)
         except ValueError:
-            # 5SGO_2 (zinc)
             onerror.append(spec)
-            return None
+            return []
 
-        seq, res = mmcif_seqres(mmcif, chain_id)
-
-        return cls(pdb_id, entity_id, chain_id, seq, res)
+        return [
+            cls(pdb_id, entity_id, cid, *mmcif_seqres(mmcif, cid))
+            for cid in chain_ids
+        ]
 
 
 MsaResSeq = dict[ResidueId, int]
@@ -111,20 +122,21 @@ def _three_to_one(three: str):
     return mapping.get(three.upper(), "X")
 
 
-def entity_find_chain_one(
+def entity_find_chain_all(
     cif_dict: dict[str, list[dict[str, Optional[str]]]],
     entity_id: str,
 ):
     chains = [
         ch
         for entity in cif_dict["entity_poly"]
-        if entity["entity_id"] == entity_id and (chains := entity.get("pdbx_strand_id"))
+        if entity["entity_id"] == entity_id
+        and (chains := entity.get("pdbx_strand_id"))
         for ch in chains.split(",")
     ]
     if not chains:
         raise ValueError(f"Entity id {entity_id} not found in the CIF file.")
 
-    return chains[0]
+    return chains
 
 
 def mmcif_seqres(
@@ -160,7 +172,7 @@ def create_mapping(
     members: dict[tuple[str, str], ClusterMember],
     msa: Path,
 ):
-    msa_resseq: dict[str, MsaResSeq] = {}
+    msa_resseq: dict[tuple[str, str], MsaResSeq] = {}
 
     with open(msa) as f:
         line = next(f)
@@ -169,7 +181,7 @@ def create_mapping(
             pdb_id, chain_id = line[1:].strip().split("_")
             member = members[(pdb_id, chain_id)]
 
-            resseq = msa_resseq[f"{pdb_id}_{chain_id}"] = {}
+            resseq = msa_resseq[(pdb_id, chain_id)] = {}
 
             fragments = []
             for line in f:
@@ -197,8 +209,11 @@ def create_mapping(
     return msa_resseq
 
 
-def load_cif_chain(index: str, resseq: MsaResSeq, mmcif_dir: Path = Path(".")):
-    pdb_id, chain_id = index.split("_")
+def load_cif_chains(
+    pdb_id: str,
+    chain_mappings: Iterable[tuple[str, MsaResSeq]],
+    mmcif_dir: Path = Path("."),
+):
     path = str(mmcif_dir / f"{pdb_id}.cif")
 
     mol = next(nuri.readfile("cif", path, sanitize=False))
@@ -212,26 +227,45 @@ def load_cif_chain(index: str, resseq: MsaResSeq, mmcif_dir: Path = Path(".")):
         for atom in sub
     }
 
-    sub = next(
-        sub for sub in mol.subs if sub.category == Cat.Chain and sub.name == chain_id
-    )
+    results: list[tuple[str, np.ndarray, dict[int, int]]] = []
+    for cid, resseq in chain_mappings:
+        sub = next(
+            sub
+            for sub in mol.subs
+            if sub.category == Cat.Chain and sub.name == cid
+        )
 
-    atom_is_ca = [atom.atomic_number == 6 and atom.name == "CA" for atom in sub]
-    coords = sub.get_conf()[atom_is_ca]
+        atom_is_ca = [
+            atom.atomic_number == 6 and atom.name == "CA" for atom in sub
+        ]
+        coords = sub.get_conf()[atom_is_ca]
 
-    ca_residues = [
-        atom_residue_map[atom.as_parent().id]
-        for atom, is_ca in zip(sub, atom_is_ca)
-        if is_ca
-    ]
-    align_to_idx = {
-        mi: ai
-        for ai, r in enumerate(ca_residues)
-        # non-polymer entity can share chain
-        if (mi := resseq.get(r, None)) is not None
-    }
+        ca_residues = [
+            atom_residue_map[atom.as_parent().id]
+            for atom, is_ca in zip(sub, atom_is_ca)
+            if is_ca
+        ]
+        align_to_idx = {
+            mi: ai
+            for ai, r in enumerate(ca_residues)
+            # non-polymer entity can share chain
+            if (mi := resseq.get(r, None)) is not None
+        }
 
-    return index, np.ascontiguousarray(coords, dtype=np.float32), align_to_idx
+        if not align_to_idx:
+            print(
+                f"Warning: No residues aligned for {pdb_id}_{cid}",
+                flush=True,
+            )
+            continue
+
+        results.append((f"{pdb_id}_{cid}", coords, align_to_idx))
+
+    return results
+
+
+def _nonempty(path: Path) -> bool:
+    return path.exists() and path.stat().st_size > 0
 
 
 def msa_align_coords(
@@ -245,6 +279,9 @@ def msa_align_coords(
 ):
     logging.basicConfig(level=logging.FATAL)
 
+    if _nonempty(seqs) and _nonempty(msa) and _nonempty(result):
+        return
+
     seqs.parent.mkdir(exist_ok=True)
     msa.parent.mkdir(exist_ok=True)
     result.parent.mkdir(exist_ok=True)
@@ -254,8 +291,7 @@ def msa_align_coords(
     members: dict[tuple[str, str], ClusterMember] = {
         (member.pdb_id, member.chain_id): member
         for spec in cluster
-        if (member := ClusterMember.from_member_spec(spec, onerror, mmcif_dir))
-        is not None
+        for member in ClusterMember.from_member_spec(spec, onerror, mmcif_dir)
     }
 
     if onerror:
@@ -272,15 +308,24 @@ def msa_align_coords(
     famsa_create_msa(seqs, msa, nthreads)
 
     resseqs = create_mapping(cluster[0], members, msa)
+
+    grouped_resseqs: dict[str, dict[str, MsaResSeq]] = defaultdict(dict)
+    for (pdb_id, chain_id), resseq in resseqs.items():
+        grouped_resseqs[pdb_id][chain_id] = resseq
+
     mapped_coords = np.array(
-        [load_cif_chain(index, resseq, mmcif_dir) for index, resseq in resseqs.items()],
+        [
+            entry
+            for pdb_id, pdb_resseqs in grouped_resseqs.items()
+            for entry in load_cif_chains(pdb_id, pdb_resseqs.items(), mmcif_dir)
+        ],
         dtype=object,
     )
 
     np.savez_compressed(result, coords=mapped_coords)
 
 
-@click.command()
+@click.command(cls=DataRootCommand)
 @click.option("--nproc", "-n", type=int, default=8)
 @click.option(
     "--mmcif-dir",

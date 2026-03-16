@@ -12,7 +12,9 @@ from Bio.PDB.MMCIFParser import MMCIFParser
 from joblib import Parallel, delayed
 from scipy.spatial import cKDTree
 
-_METAL_ELEMENTS = ["MG", "ZN", "MN", "CA", "FE", "NI", "CO", "CU", "K", "NA"]
+from ..utils._data_root import DataRootCommand
+
+_METAL_ELEMENTS = ["MG", "ZN", "MN", "CA", "FE", "NI", "CO", "CU", "K", "NA", "HG", "CD", "SR", "BA", "AL", "TI", "V", "CR", "MO", "W"]
 
 
 @dataclass
@@ -261,7 +263,7 @@ def process_cluster(
     return {"csv_path": str(csv_path), "n_rows": len(out_df)}
 
 
-@click.command(context_settings=dict(show_default=True))
+@click.command(cls=DataRootCommand, context_settings=dict(show_default=True))
 @click.option(
     "--in-dir",
     type=click.Path(file_okay=False, path_type=Path),

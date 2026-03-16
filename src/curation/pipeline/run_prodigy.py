@@ -15,6 +15,8 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
+from ..utils._data_root import DataRootCommand
+
 _PRODIGY_CMD: list[str] = _shlex.split(os.environ.get("PRODIGY_CMD", "prodigy_cryst"))
 
 RX_NO_CONTACTS = re.compile(r"No contacts found", re.I)
@@ -249,7 +251,9 @@ def _compute_stats(s: pd.Series) -> str:
     )
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.command(
+    cls=DataRootCommand, context_settings=dict(help_option_names=["-h", "--help"])
+)
 @click.option(
     "--raw-dir",
     type=click.Path(path_type=Path, exists=True, file_okay=False),

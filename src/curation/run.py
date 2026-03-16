@@ -71,6 +71,15 @@ def promise_data():
         "and deleted when the pipeline finishes."
     ),
 )
+@click.option(
+    "--data-root",
+    type=click.Path(path_type=Path),
+    default=None,
+    help=(
+        "Override the data/ sub-directory inside workdir. "
+        "E.g. pass '.' if data files live directly in workdir."
+    ),
+)
 def run(
     spec: Path,
     mmcif_store: Path,
@@ -78,6 +87,7 @@ def run(
     start_from: str | None,
     stop_after: str | None,
     keep_intermediates: bool,
+    data_root: Path | None,
 ):
     """Run the full curation pipeline (or a slice of it)."""
     workdir = workdir.resolve()
@@ -90,6 +100,7 @@ def run(
         start_from=start_from,
         stop_after=stop_after,
         keep_intermediates=keep_intermediates,
+        data_root=data_root,
     )
 
 

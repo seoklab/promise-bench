@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Set
 
 import click
 import gemmi
+import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
@@ -19,46 +17,14 @@ from ..utils.constants import (
     LIGAND_EXCLUDE,
     NUCLEOTIDE_3C,
 )
-
-CSV_HEADERS = [
-    "pdb",
-    "chain_author",
-    "chain_auth_asm",
-    "assembly_id",
-    "conf_label",
-    "protein_count",
-    "ligand_count",
-    "chain_list_label",
-    "chain_list_author",
-    "ligands",
-    "resolution",
-    "experimental_method",
-    "desc",
-]
-MMCIF_DIR: Path = Path(".")
-_LABEL_BASE_RX = re.compile(r"\d+$")
+from ..utils._data_root import DataRootCommand
+from ..utils._geometry import coords_and_ligs_from_model, get_contact_chains, get_contact_ligands
+from ..utils._pdb_helpers import check_auth_base, label_base, parse_member_cell
+from .types import AssemblyEntry, AssemblyResult, CifMeta
 
 
-def _label_base(label_or_clone: str) -> str:
-    return _LABEL_BASE_RX.sub("", str(label_or_clone))
-
-
-def clusters_root_rglob_csv(root: Path):
+def _rglob_csv(root: Path):
     return root.rglob("*.csv")
-
-
-def _parse_member_cell(cell):
-    s = cell.strip()
-    if "_" in s:
-        pdb, ch = s.split("_", 1)
-    elif ":" in s:
-        pdb, ch = s.split(":", 1)
-    else:
-        if len(s) >= 5:
-            pdb, ch = s[:4], s[4:]
-        else:
-            raise ValueError(f"Bad member format: {s}")
-    return pdb.lower(), ch  # ch: auth_asym_id
 
 
 def read_cluster_members(csv_path):
@@ -72,7 +38,7 @@ def read_cluster_members(csv_path):
             if not cell:
                 continue
             lab = (r.get("label") or "").strip()
-            pdb, auth = _parse_member_cell(cell)
+            pdb, auth = parse_member_cell(cell)
             rows.append((pdb, auth, lab))
     return rows
 
@@ -81,7 +47,7 @@ def load_centers_from_file(path) -> dict:
     df = pd.read_csv(path)
 
     def std(chain: str) -> str:
-        pdb, chain_id = _parse_member_cell(chain)
+        pdb, chain_id = parse_member_cell(chain)
         return f"{pdb.lower()}_{chain_id}"
 
     out = {
@@ -98,25 +64,23 @@ def load_centers_from_file(path) -> dict:
     return out
 
 
-@dataclass
-class _Meta:
-    resolution: float
-    method: str
-    keywords: str
-    block: gemmi.cif.Block
-
-
-def _load_metadata(cif_path: Path) -> _Meta:
+def _load_cif_meta(cif_path: Path) -> CifMeta:
+    """Read an mmCIF file and return structured metadata."""
     doc = gemmi.cif.read(str(cif_path))
     blk = doc.sole_block()
 
     def _get_res() -> float:
-        try:
-            v = blk.find_value("_reflns.d_resolution_high")
-            if v and v not in ("?", "."):
-                return float(v)
-        except Exception:
-            pass
+        for tag in (
+            "_reflns.d_resolution_high",
+            "_em_3d_reconstruction.resolution",
+            "_refine.ls_d_res_high",
+        ):
+            try:
+                v = blk.find_value(tag)
+                if v and v not in ("?", "."):
+                    return float(v)
+            except Exception:
+                pass
         return float("inf")
 
     method = blk.find_value("_exptl.method") or ""
@@ -127,104 +91,7 @@ def _load_metadata(cif_path: Path) -> _Meta:
     if keywords:
         keywords = keywords.strip("'")
 
-    return _Meta(resolution=_get_res(), method=method, keywords=keywords, block=blk)
-
-
-def _protein_label_ids(block: gemmi.cif.Block) -> Set[str]:
-    lab_ids = block.find_values("_struct_asym.id")
-    ent_ids = block.find_values("_struct_asym.entity_id")
-    lab2ent: Dict[str, str] = {}
-    if lab_ids and ent_ids and len(lab_ids) == len(ent_ids):
-        for la, eid in zip(lab_ids, ent_ids):
-            if la and eid and la not in (".", "?") and eid not in (".", "?"):
-                lab2ent[la] = eid
-
-    ep_eid = block.find_values("_entity_poly.entity_id")
-    ep_typ = block.find_values("_entity_poly.type")
-    ent2type: Dict[str, str] = {}
-    if ep_eid and ep_typ and len(ep_eid) == len(ep_typ):
-        for eid, ty in zip(ep_eid, ep_typ):
-            if eid and ty:
-                ent2type[eid] = ty
-
-    prot_labels: Set[str] = set()
-    for la, eid in lab2ent.items():
-        ty = (ent2type.get(eid) or "").lower()
-        if "polypeptide" in ty:
-            prot_labels.add(la)
-
-    return prot_labels
-
-
-def _label_to_auth_map(block: gemmi.cif.Block) -> Dict[str, str]:
-    protein_labels = _protein_label_ids(block)
-    if not protein_labels:
-        return {}
-
-    labs = block.find_values("_atom_site.label_asym_id")
-    auth = block.find_values("_atom_site.auth_asym_id")
-    if not labs or not auth or len(labs) != len(auth):
-        return {}
-
-    seen_auths: Dict[str, Set[str]] = defaultdict(set)
-    for la, au in zip(labs, auth):
-        if not la or la in (".", "?"):
-            continue
-        if la not in protein_labels:
-            continue
-        if not au or au in (".", "?"):
-            continue
-        seen_auths[la].add(au)
-
-    mapping: Dict[str, str] = {}
-    for la, aus in seen_auths.items():
-        if len(aus) == 0:
-            continue
-        if len(aus) > 1:
-            raise ValueError(f"label '{la}' mapped to multiple auths: {sorted(aus)}")
-        mapping[la] = next(iter(aus))
-
-    return mapping
-
-
-def _label_base_to_entity_poly_type(block: gemmi.cif.Block) -> Dict[str, str]:
-    label_ids = block.find_values("_struct_asym.id")
-    ent_ids = block.find_values("_struct_asym.entity_id")
-    lab2ent: Dict[str, str] = {}
-    if label_ids and ent_ids and len(label_ids) == len(ent_ids):
-        for la, eid in zip(label_ids, ent_ids):
-            if la and eid and la not in ("?", ".") and eid not in ("?", "."):
-                lab2ent[la] = eid
-
-    ep_entity_id = block.find_values("_entity_poly.entity_id")
-    ep_type = block.find_values("_entity_poly.type")
-    ent2type: Dict[str, str] = {}
-    if ep_entity_id and ep_type and len(ep_entity_id) == len(ep_type):
-        for eid, ty in zip(ep_entity_id, ep_type):
-            if eid and ty:
-                ent2type[eid] = ty
-
-    labbase2type: Dict[str, str] = {}
-    for la, eid in lab2ent.items():
-        ty = ent2type.get(eid, "")
-        labbase2type[_label_base(la)] = ty
-    return labbase2type
-
-
-def _assembly_rows(block: gemmi.cif.Block) -> List[Dict[str, str]]:
-    tbl = block.find_mmcif_category("_pdbx_struct_assembly")
-    if not tbl:
-        return []
-    full_tags = [str(t) for t in tbl.tags]
-    short_keys = [t.split(".")[-1] for t in full_tags]
-
-    out: List[Dict[str, str]] = []
-    for row in tbl:
-        rec: Dict[str, str] = {}
-        for short in short_keys:
-            rec[short] = row[short]
-        out.append(rec)
-    return out
+    return CifMeta(resolution=_get_res(), method=method, keywords=keywords, block=blk)
 
 
 def fetch_assemblies(
@@ -237,26 +104,23 @@ def fetch_assemblies(
     exclude_na: bool = True,
 ):
     try:
-        meta = _load_metadata(cif_path)
+        meta = _load_cif_meta(cif_path)
         if not (meta.resolution <= resolution_cutoff):
             return []
 
         st_asu = gemmi.read_structure(str(cif_path))
         st_asu.remove_hydrogens()
 
-        labbase2poly = _label_base_to_entity_poly_type(meta.block)
+        labbase2poly = meta.label_base_to_entity_poly_type()
 
-        asm_rows = _assembly_rows(meta.block)
-        results: List[dict] = []
+        asm_rows = meta.assembly_rows()
+        results: list[AssemblyResult] = []
 
         for row in asm_rows:
-            asm_id = row.get("id", "")
-            details = (row.get("details") or "").lower()
-            if not asm_id:
+            if not row.id or not row.is_author_defined:
                 continue
 
-            if "author" not in details:
-                continue
+            asm_id = row.id
 
             try:
                 st_asm = st_asu.clone()
@@ -270,13 +134,13 @@ def fetch_assemblies(
                 continue
 
             mdl = st_asm[0]
-            clone_chain_names: List[str] = []
+            clone_chain_names: list[str] = []
             for ch in mdl.subchains():
                 clone_chain_names.append(ch.subchain_id())
 
-            polymer_clones: List[str] = []
+            polymer_clones: list[str] = []
             for cid in clone_chain_names:
-                base = _label_base(cid)
+                base = label_base(cid)
                 poly_type = labbase2poly.get(base, "")
                 if "polypeptide" in poly_type:
                     polymer_clones.append(cid)
@@ -285,7 +149,7 @@ def fetch_assemblies(
                 has_na = False
                 for base, poly_type in labbase2poly.items():
                     if poly_type and "nucleotide" in poly_type.lower():
-                        if any(_label_base(c) == base for c in clone_chain_names):
+                        if any(label_base(c) == base for c in clone_chain_names):
                             has_na = True
                             break
                 if has_na:
@@ -296,7 +160,7 @@ def fetch_assemblies(
 
             mdl = st_asm[0]
 
-            auth_to_labels: Dict[str, set[str]] = defaultdict(set)
+            auth_to_labels: dict[str, set[str]] = defaultdict(set)
 
             for ch in mdl:
                 auth_clone = ch.name
@@ -306,7 +170,7 @@ def fetch_assemblies(
                     if not label_clone:
                         continue
 
-                    base = _label_base(label_clone)
+                    base = label_base(label_clone)
                     poly_type = (labbase2poly.get(base) or "").lower()
                     if "polypeptide" not in poly_type:
                         continue
@@ -315,7 +179,7 @@ def fetch_assemblies(
                 if local_labels:
                     auth_to_labels[auth_clone].update(local_labels)
 
-            assembly_auth_to_mmcif: Dict[str, List[str]] = {
+            assembly_auth_to_mmcif: dict[str, list[str]] = {
                 au: sorted(list(labels)) for au, labels in auth_to_labels.items()
             }
 
@@ -365,21 +229,25 @@ def fetch_assemblies(
             if total_lig_instances > max_lig_instances:
                 continue
 
+            chain_coords, lig_instances = coords_and_ligs_from_model(mdl)
+
             results.append(
-                {
-                    "assembly": st_asm,
-                    "assembly_id": str(asm_id),
-                    "bio_assembly": row,
-                    "chain_list_label": chain_list_label,
-                    "chain_list_author": chain_list_author,
-                    "ligand_list": ligand_list,
-                    "polymer_count": len(polymer_clones),
-                    "ligand_count": len(ligand_list),
-                    "resolution": meta.resolution,
-                    "method": meta.method,
-                    "desc": meta.keywords,
-                    "assembly_auth_to_mmcif": dict(assembly_auth_to_mmcif),
-                }
+                AssemblyResult(
+                    assembly=st_asm,
+                    assembly_id=str(asm_id),
+                    bio_assembly=row,
+                    chain_list_label=chain_list_label,
+                    chain_list_author=chain_list_author,
+                    ligand_list=ligand_list,
+                    polymer_count=len(polymer_clones),
+                    ligand_count=len(ligand_list),
+                    resolution=meta.resolution,
+                    method=meta.method,
+                    desc=meta.keywords,
+                    assembly_auth_to_mmcif=dict(assembly_auth_to_mmcif),
+                    chain_coords=chain_coords,
+                    lig_instances=lig_instances,
+                )
             )
 
         return results
@@ -389,28 +257,19 @@ def fetch_assemblies(
         return []
 
 
-def check_auth_base(auth: str, auth_chain: str) -> bool:
-    if not auth_chain.startswith(auth):
-        return False
-
-    suffix = auth_chain[len(auth) :]
-    if suffix == "":
-        return True
-    if re.fullmatch(r"[1-9][0-9]?", suffix):
-        return True
-    return False
-
-
 def process_cluster_file(
     in_csv,
     clusters_root,
     out_root,
     center_chain_map,
     save_assemblies_dir,
+    mmcif_dir,
     max_polymer_instances,
     max_lig_instances,
     max_resolution,
     exclude_na,
+    chain_cutoff,
+    ligand_cutoff,
 ):
     members = read_cluster_members(in_csv)
     rel = in_csv.relative_to(clusters_root)
@@ -421,14 +280,14 @@ def process_cluster_file(
         return str(out_csv), 0
 
     per_pdb_assemblies = {}
-    out_rows = []
+    out_entries: list[AssemblyEntry] = []
 
     for pdb, auth, conf_label in members:
         chain = pdb.lower() + "_" + auth
         if chain not in center_chain_map.get(in_csv.stem.lower(), []):
             print(f"Skipping {chain} not in centers_file for {in_csv.stem.lower()}")
             continue
-        cif_path = MMCIF_DIR / f"{pdb.lower()}.cif"
+        cif_path = mmcif_dir / f"{pdb.lower()}.cif"
         if not cif_path.exists():
             print(f"[!] Missing CIF: {cif_path} (skip {pdb})")
             per_pdb_assemblies[pdb] = []
@@ -457,81 +316,63 @@ def process_cluster_file(
         assemblies_filtered = per_pdb_assemblies[pdb]
         matched_assemblies = []
 
-        for asm_data in assemblies_filtered:  # pdb
-            assembly = asm_data["assembly"]  # st_asm
-            assembly_id = asm_data["assembly_id"]
-            assembly_auth_to_mmcif = asm_data["assembly_auth_to_mmcif"]
-            assembly_chain_list_auth = asm_data["chain_list_author"]
-
-            for auth_chain in assembly_chain_list_auth:
-                if check_auth_base(auth, auth_chain):  # auth in auth_chain:
+        for asm_result in assemblies_filtered:
+            for auth_chain in asm_result.chain_list_author:
+                if check_auth_base(auth, auth_chain):
                     auth_asm = auth_chain
-                    matched_assemblies.append(str(assembly_id))
+                    matched_assemblies.append(asm_result.assembly_id)
                     break
             else:
                 continue  # not found, skip to next assembly
 
-            # drop homomer duplicates: only if everything is same except auth_asm
-            duplicate = False
+            # build typed entry with contacts computed here
+            contact_ch = get_contact_chains(
+                auth_asm, asm_result.chain_coords, chain_cutoff
+            )
+            contact_lig = get_contact_ligands(
+                asm_result.chain_coords.get(auth_asm, np.empty((0, 3))),
+                asm_result.lig_instances,
+                ligand_cutoff,
+            )
+            entry = asm_result.to_entry(
+                pdb=pdb,
+                chain_author=auth,
+                chain_auth_asm=auth_asm,
+                conf_label=str(conf_label),
+                contact_chains=contact_ch,
+                contact_ligands=contact_lig,
+            )
 
-            def list_to_str(lst):
-                if not lst:
-                    return ""
-                return ";".join(str(x) for x in lst)
-
-            for asm in out_rows:
-                if (
-                    asm[3] == str(asm_data["assembly_id"])
-                    and asm[4] == str(conf_label)
-                    and asm[7] == list_to_str(asm_data["chain_list_label"])
-                    and asm[8] == list_to_str(asm_data["chain_list_author"])
-                    and asm[9] == list_to_str(asm_data["ligand_list"])
-                    and asm[2] != str(auth_asm)
-                ):
-                    print(
-                        f"[warn] {pdb} chain {auth_asm} (conf_label={conf_label}) homomer duplicate: {asm[2]} {auth_asm}"
-                    )
-                    duplicate = True
-                    break
-            if duplicate:
+            # drop homomer duplicates
+            if any(entry.is_homomer_duplicate(e) for e in out_entries):
+                print(
+                    f"[warn] {pdb} chain {auth_asm} (conf_label={conf_label}) homomer duplicate"
+                )
                 continue
 
-            # save assembly CIF file
+            # save assembly CIF file (skip if already exists)
             pdb_upper = pdb.upper()
             rep = pdb_upper[1:3]
-            cif_file = save_dir / rep / pdb_upper / f"asm_{pdb}_{assembly_id}.cif"
-            cif_file.parent.mkdir(parents=True, exist_ok=True)
-            assembly.make_mmcif_block().write_file(str(cif_file))
+            cif_file = save_dir / rep / pdb_upper / f"asm_{pdb}_{asm_result.assembly_id}.cif"
+            map_file = save_dir / rep / pdb_upper / f"asm_{pdb}_{asm_result.assembly_id}_map.json"
 
-            map_file = save_dir / rep / pdb_upper / f"asm_{pdb}_{assembly_id}_map.json"
-            with map_file.open("w", encoding="utf-8") as f:
-                json.dump(assembly_auth_to_mmcif, f, indent=2, ensure_ascii=False)
+            if not (cif_file.exists() and map_file.exists()):
+                cif_file.parent.mkdir(parents=True, exist_ok=True)
+                asm_result.assembly.make_mmcif_block().write_file(str(cif_file))
+                with map_file.open("w", encoding="utf-8") as f:
+                    json.dump(asm_result.assembly_auth_to_mmcif, f, indent=2, ensure_ascii=False)
 
-            out_rows.append(
-                [
-                    pdb,
-                    auth,
-                    auth_asm,
-                    str(assembly_id),
-                    str(conf_label),
-                    int(asm_data["polymer_count"]),
-                    int(asm_data["ligand_count"]),
-                    list_to_str(asm_data["chain_list_label"]),
-                    list_to_str(asm_data["chain_list_author"]),
-                    list_to_str(asm_data["ligand_list"]),
-                    float(asm_data["resolution"]),
-                    str(asm_data["method"]),
-                    str(asm_data["desc"]),
-                ]
-            )
+            out_entries.append(entry)
+
         if len(matched_assemblies) > 1:
             print(
                 f"[warn] {pdb} chain {auth} (conf_label={conf_label}) multiple matched assemblies: {', '.join(matched_assemblies)}"
             )
 
-    if not out_rows or len({r[4] for r in out_rows}) <= 1:
+    if not out_entries or len({e.conf_label for e in out_entries}) <= 1:
         print(
-            f"Skipping CSV creation for {out_csv}, {len(out_rows)} rows, {len({r[4] for r in out_rows})} conf_label"
+            f"Skipping CSV creation for {out_csv}, {len(out_entries)} rows, "
+            f"{len({e.conf_label for e in out_entries})} conf_label"
         )
         if out_csv.exists():
             out_csv.unlink()
@@ -539,13 +380,15 @@ def process_cluster_file(
 
     with out_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(CSV_HEADERS)
-        w.writerows(out_rows)
+        w.writerow(AssemblyEntry.csv_headers())
+        w.writerows(e.to_csv_row() for e in out_entries)
 
-    return str(out_csv), len(out_rows)
+    return str(out_csv), len(out_entries)
 
 
-@click.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.command(
+    cls=DataRootCommand, context_settings=dict(help_option_names=["-h", "--help"])
+)
 @click.option(
     "--mmcif-dir",
     type=click.Path(path_type=Path, exists=True, file_okay=False),
@@ -576,7 +419,11 @@ def process_cluster_file(
 @click.option("--max-lig-instances", type=int, default=12)
 @click.option("--max-resolution", type=float, default=5.0)
 @click.option("--exclude-na", default=True)
-@click.option("--workers", type=int, default=1)
+@click.option("--chain-cutoff", type=float, default=5.0, show_default=True,
+              help="Cutoff (Å) for contact-chain proximity.")
+@click.option("--ligand-cutoff", type=float, default=7.0, show_default=True,
+              help="Cutoff (Å) for contact-ligand proximity.")
+@click.option("--workers", type=int, default=8)
 @click.option(
     "--centers-file",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
@@ -595,14 +442,15 @@ def main(
     max_lig_instances,
     max_resolution,
     exclude_na,
+    chain_cutoff,
+    ligand_cutoff,
     workers,
     centers_file,
 ):
-    global MMCIF_DIR
-    MMCIF_DIR = Path(mmcif_dir)
+    mmcif_dir = Path(mmcif_dir)
     clusters_root = Path(clusters_root)
     out_root = Path(out_root)
-    files = sorted(clusters_root_rglob_csv(clusters_root))
+    files = sorted(_rglob_csv(clusters_root))
 
     save_dir = Path(save_assemblies_dir) if save_assemblies else None
     if save_dir is not None:
@@ -611,7 +459,6 @@ def main(
     if centers_file:
         center_chain_map = load_centers_from_file(centers_file)
         allowed = set(center_chain_map.keys())
-        # print(allowed)
         if not allowed:
             click.echo("[!] No centers in centers_files.")
             raise SystemExit(1)
@@ -637,15 +484,22 @@ def main(
             out_root,
             center_chain_map,
             save_dir,
+            mmcif_dir,
             max_polymer_instances,
             max_lig_instances,
             max_resolution,
             exclude_na,
+            chain_cutoff,
+            ligand_cutoff,
         )
         for p in tqdm(files, desc="Clusters", unit="file")
     )
+    skipped = sum(1 for _, n in results if n == -1)
     for out_csv, n in results:
+        if n == -1:
+            continue
         click.echo(f"[fetch] {out_csv} ({n} rows)")
+    click.echo(f"[done] {len(results)} clusters, {skipped} skipped (already exist)")
 
 
 if __name__ == "__main__":
