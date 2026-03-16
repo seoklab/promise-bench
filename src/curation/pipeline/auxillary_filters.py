@@ -352,7 +352,7 @@ def apply_all_filters(
 @click.option(
     "--dataset-dir",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
-    default="data-90/dataset-pipeline",
+    default="data-95/dataset-pipeline",
     show_default=True,
     help="Path to dataset-pipeline/ directory.",
 )

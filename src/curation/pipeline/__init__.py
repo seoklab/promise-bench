@@ -215,6 +215,15 @@ STEPS: list[Step] = [
             _d(d, t, "seqcluster_work"),
         ],
     ),
+    Step(
+        "auxillary_filters",
+        "curation.pipeline.auxillary_filters",
+        entry="auxillary_filters",
+        args_fn=lambda s, m, w, d, t: [
+            "--dataset-dir",
+            str(d / FINAL_OUTPUT_DIR),
+        ],
+    ),
 ]
 
 
