@@ -8,8 +8,8 @@ from scipy.spatial import distance as D
 from sklearn.cluster import AgglomerativeClustering
 from tqdm import tqdm
 
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils.typedefs import TMScoreResult
 
 

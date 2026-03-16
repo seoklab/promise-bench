@@ -17,8 +17,8 @@ from ..utils.constants import (
     LIGAND_EXCLUDE,
     NUCLEOTIDE_3C,
 )
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils._geometry import coords_and_ligs_from_model, get_contact_chains, get_contact_ligands
 from ..utils._pdb_helpers import check_auth_base, label_base, parse_member_cell
 from .types import AssemblyEntry, AssemblyResult, CifMeta

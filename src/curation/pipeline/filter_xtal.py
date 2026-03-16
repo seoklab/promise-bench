@@ -11,8 +11,8 @@ import pandas as pd
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils._geometry import coords_and_ligs_from_model, ligand_mediators_for_pair
 from .types import (
     LigandEdge,

@@ -15,8 +15,8 @@ import parasail
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils.constants import _AA3, _NT
 
 DBG_DEFAULTS = {

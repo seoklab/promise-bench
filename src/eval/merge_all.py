@@ -30,7 +30,7 @@ import numpy as np
 import click
 from collections import defaultdict
 
-from curation.utils._config import eval_cfg as E
+from utils._config import eval_cfg as E
 
 
 # Model mapping

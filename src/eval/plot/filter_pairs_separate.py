@@ -2,7 +2,7 @@ import json
 import os
 import sys
 
-from curation.utils._config import eval_cfg as E
+from utils._config import eval_cfg as E
 
 # Threshold parameter (can be passed as command line argument)
 THRESHOLD = float(sys.argv[1]) if len(sys.argv) > 1 else 0.2

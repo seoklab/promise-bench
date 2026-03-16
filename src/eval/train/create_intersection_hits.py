@@ -12,7 +12,7 @@ import os
 import sys
 from collections import defaultdict
 
-from curation.utils._config import eval_cfg as E
+from utils._config import eval_cfg as E
 
 # Paths (from config)
 FOLDSEEK_BASE = str(E.dir("memorization_hits_foldseek"))

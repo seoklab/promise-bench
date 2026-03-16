@@ -12,8 +12,8 @@ from Bio.PDB.MMCIFParser import MMCIFParser
 from joblib import Parallel, delayed
 from scipy.spatial import cKDTree
 
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 
 _METAL_ELEMENTS = ["MG", "ZN", "MN", "CA", "FE", "NI", "CO", "CU", "K", "NA", "HG", "CD", "SR", "BA", "AL", "TI", "V", "CR", "MO", "W"]
 

@@ -15,8 +15,8 @@ from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 from joblib import Parallel, delayed
 from tqdm.auto import tqdm
 
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 
 _PRODIGY_CMD: list[str] = _shlex.split(os.environ.get("PRODIGY_CMD", "prodigy_cryst"))
 

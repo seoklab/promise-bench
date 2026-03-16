@@ -1,11 +1,8 @@
 # ProMiSE-bench path configuration.
 #
-# Two sections: ``pipeline`` (curation) and ``eval`` (evaluation).
-# All relative paths are resolved from the section's ``data_root``.
-#
 # Usage:
-#   from curation.utils._config import pipeline_cfg as C
-#   from curation.utils._config import eval_cfg as E
+#   from utils._config import pipeline_cfg as C
+#   from utils._config import eval_cfg as E
 #
 #   C.dir("seqs")            -> Path("data/seqs")
 #   C.file("filtered_pairs") -> Path("data/filtered-pairs.csv")

@@ -22,8 +22,8 @@ from pydantic import (
 )
 from tqdm import tqdm
 
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from ..utils.typedefs import GroupSet
 
 

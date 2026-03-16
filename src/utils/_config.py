@@ -7,8 +7,8 @@ Usage
 -----
 ::
 
-    from curation.utils._config import pipeline_cfg as C
-    from curation.utils._config import eval_cfg as E
+    from utils._config import pipeline_cfg as C
+    from utils._config import eval_cfg as E
 
     C.dir("seqs")            # -> Path("data/seqs")
     C.file("filtered_pairs") # -> Path("data/filtered-pairs.csv")
@@ -29,8 +29,8 @@ import yaml
 # ---------------------------------------------------------------------------
 
 # config/ lives at the repo root, next to src/
-# _config.py is at src/curation/utils/_config.py -> 3 parents up to repo root
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+# _config.py is at src/utils/_config.py -> 2 parents up to repo root
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_PATH = _REPO_ROOT / "config" / "config.yaml"
 
 
@@ -152,8 +152,8 @@ class EvalConfig(SectionConfig):
 # Singleton instances
 # =====================================================================
 
-# Curation pipeline: ``from curation.utils._config import pipeline_cfg as C``
+# Curation pipeline: ``from utils._config import pipeline_cfg as C``
 pipeline_cfg = PipelineConfig()
 
-# Evaluation: ``from curation.utils._config import eval_cfg as E``
+# Evaluation: ``from utils._config import eval_cfg as E``
 eval_cfg = EvalConfig()

@@ -24,7 +24,7 @@ from typing import Optional
 
 import click
 
-from curation.utils._config import pipeline_cfg as C
+from utils._config import pipeline_cfg as C
 
 # ---------------------------------------------------------------------------
 # Step registry

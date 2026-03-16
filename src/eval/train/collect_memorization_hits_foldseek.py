@@ -16,7 +16,7 @@ import json
 from datetime import datetime
 from collections import defaultdict
 
-from curation.utils._config import eval_cfg as E
+from utils._config import eval_cfg as E
 
 # Paths (from config)
 META_DATA_DIR = str(E.external("meta_data_dir") or "/home.galaxy4/seeun/DB/RCSB/meta_data")

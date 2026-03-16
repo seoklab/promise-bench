@@ -5,8 +5,8 @@ import click
 import numpy as np
 import pandas as pd
 
-from ..utils._config import pipeline_cfg as C
-from ..utils._data_root import DataRootCommand
+from utils._config import pipeline_cfg as C
+from utils._data_root import DataRootCommand
 from .types import DatasetPair, PairSide
 
 
