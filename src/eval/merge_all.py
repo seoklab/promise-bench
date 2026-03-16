@@ -2,37 +2,34 @@
 """
 Merge all valid pair data for paper analysis.
 
-Combines:
-1. MSA Preference (per_pair_summary.csv)
-2. ConfBench scores (confbench_scores_valid_pairs.json)
-3. Distogram-based ConfBench scores (confbench_scores_distogram.json)
-4. Training Bias from tm_0.9_fident_0.8 ONLY (ratio_difference, entry1_hits, entry2_hits)
-5. Training Cutoff Survival (survived_clusters_threshold60.json)
+Inputs (all configurable via CLI options):
+  --valid-pairs-json          Base reference of valid conformational pairs (valid_pairs.json)
+  --msa-pref-csv              MSA preference scores per pair (per_pair_summary.csv)
+  --confbench-json            RMSD-based ConfBench scores (confbench_scores_valid_pairs.json)
+  --confbench-distogram-json  Distogram-based ConfBench scores (confbench_scores_distogram.json)
+  --training-bias-dir         Directory of per-model training bias JSONs (tm_0.9_fident_0.8)
+  --survived-clusters-json    Training cutoff survival flags (survived_clusters_threshold60.json)
 
-Output:
-- JSON: {model: {set_name: {cluster_id: {pair_key: {...data...}}}}}
-- CSV: flat format for analysis
+Outputs (written to --output-dir):
+  merged_valid_pairs_data.json
+      {model: {set_name: {cluster_id: {pair_key: {metric: value, ...}}}}}
+  merged_valid_pairs_data.csv
+      Flat table with columns: model, set_name, cluster_id, conf1_name, conf2_name,
+      msa_pref_sum, msa_pref_avg, same_sign_sum_avg, over_coverage_0.1,
+      rmsd_conf1_conf2, confbench_mean (apo-monomers) /
+      confbench_apo_pred & confbench_holo_pred (induced sets),
+      distogram_confbench*, distogram_dynamic_confbench*,
+      bias_entry1_hits, bias_entry2_hits, bias_ratio_diff,
+      after_training_cutoff
 """
 
 import os
 import json
 import pandas as pd
 import numpy as np
+import click
 from collections import defaultdict
 
-
-# ============== Configuration ==============
-VALID_PAIRS_JSON = "/home.galaxy4/seeun/works/projects/multi_bench/script_final/output/valid_pairs.json"
-CONFBENCH_JSON = "/home/yubeen/projects/foundation_model/dynamic_set/final/0125_final/confbench_scores_valid_pairs.json"
-CONFBENCH_DISTOGRAM_JSON = "/home/yubeen/projects/foundation_model/dynamic_set/final/confbench_scores_distogram.json"
-MSA_PREF_CSV = "/home.galaxy4/seeun/works/projects/multi_bench/script_msa/valid_pairs_output/per_pair_summary.csv"
-
-# Use ONLY this path for training bias
-TRAINING_BIAS_DIR = "/home/bonjae02/projects/promise-bench/data_eval/train/training_bias"
-
-SURVIVED_CLUSTERS_JSON = "/home.galaxy4/seeun/works/projects/multi_bench/script_final/output/survived_clusters_threshold60.json"
-
-OUTPUT_DIR = "/home.galaxy4/seeun/works/projects/multi_bench/anal/output"
 
 # Model mapping
 MODELS = ['alphafold3', 'boltz1', 'boltz2', 'chai', 'bioemu']
@@ -63,15 +60,15 @@ SURVIVED_MODEL_MAP = {
 }
 
 
-def load_valid_pairs():
+def load_valid_pairs(valid_pairs_json):
     """Load valid_pairs.json as the base reference."""
-    with open(VALID_PAIRS_JSON, 'r') as f:
+    with open(valid_pairs_json, 'r') as f:
         return json.load(f)
 
 
-def load_msa_pref():
+def load_msa_pref(msa_pref_csv):
     """Load MSA preference data from CSV."""
-    df = pd.read_csv(MSA_PREF_CSV)
+    df = pd.read_csv(msa_pref_csv)
     
     # Create lookup dict: (set_name, cluster_id, conf1, conf2) -> row
     msa_lookup = {}
@@ -85,26 +82,26 @@ def load_msa_pref():
     return msa_lookup
 
 
-def load_confbench():
+def load_confbench(confbench_json):
     """Load ConfBench scores."""
-    with open(CONFBENCH_JSON, 'r') as f:
+    with open(confbench_json, 'r') as f:
         return json.load(f)
 
 
-def load_confbench_distogram():
+def load_confbench_distogram(confbench_distogram_json):
     """Load Distogram-based ConfBench scores."""
-    with open(CONFBENCH_DISTOGRAM_JSON, 'r') as f:
+    with open(confbench_distogram_json, 'r') as f:
         return json.load(f)
 
 
-def load_training_bias():
+def load_training_bias(training_bias_dir):
     """Load training bias data from tm_0.9_fident_0.8 ONLY."""
     bias_data = {}
     
     for model, filename in BIAS_FILE_MAP.items():
         if filename is None:
             continue
-        filepath = os.path.join(TRAINING_BIAS_DIR, filename)
+        filepath = os.path.join(training_bias_dir, filename)
         if os.path.exists(filepath):
             with open(filepath, 'r') as f:
                 bias_data[model] = json.load(f)
@@ -115,9 +112,9 @@ def load_training_bias():
     return bias_data
 
 
-def load_survived_clusters():
+def load_survived_clusters(survived_clusters_json):
     """Load survived clusters (after training cutoff)."""
-    with open(SURVIVED_CLUSTERS_JSON, 'r') as f:
+    with open(survived_clusters_json, 'r') as f:
         return json.load(f)
 
 
@@ -269,17 +266,18 @@ def get_confbench_distogram_data(confbench_distogram, set_name, cluster_id, conf
     return result, found_key
 
 
-def merge_all_data():
+def merge_all_data(valid_pairs_json, confbench_json, confbench_distogram_json,
+                    msa_pref_csv, training_bias_dir, survived_clusters_json):
     """Merge all data sources into unified format."""
     print("Loading data sources...")
-    print(f"  Training Bias from: {TRAINING_BIAS_DIR}")
+    print(f"  Training Bias from: {training_bias_dir}")
     
-    valid_pairs = load_valid_pairs()
-    msa_lookup = load_msa_pref()
-    confbench = load_confbench()
-    confbench_distogram = load_confbench_distogram()
-    bias_data = load_training_bias()
-    survived_data = load_survived_clusters()
+    valid_pairs = load_valid_pairs(valid_pairs_json)
+    msa_lookup = load_msa_pref(msa_pref_csv)
+    confbench = load_confbench(confbench_json)
+    confbench_distogram = load_confbench_distogram(confbench_distogram_json)
+    bias_data = load_training_bias(training_bias_dir)
+    survived_data = load_survived_clusters(survived_clusters_json)
     
     bias_lookup = create_bias_lookup(bias_data)
     survived_lookup = create_survived_lookup(survived_data)
@@ -463,19 +461,19 @@ def merge_all_data():
     return json_output, csv_rows
 
 
-def save_outputs(json_output, csv_rows):
+def save_outputs(json_output, csv_rows, output_dir):
     """Save JSON and CSV outputs."""
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     
     # Save JSON
-    json_path = os.path.join(OUTPUT_DIR, 'merged_valid_pairs_data.json')
+    json_path = os.path.join(output_dir, 'merged_valid_pairs_data.json')
     with open(json_path, 'w') as f:
         json.dump(json_output, f, indent=2)
     print(f"\nSaved JSON: {json_path}")
     
     # Save CSV
     df = pd.DataFrame(csv_rows)
-    csv_path = os.path.join(OUTPUT_DIR, 'merged_valid_pairs_data.csv')
+    csv_path = os.path.join(output_dir, 'merged_valid_pairs_data.csv')
     df.to_csv(csv_path, index=False)
     print(f"Saved CSV: {csv_path}")
     
@@ -489,13 +487,39 @@ def save_outputs(json_output, csv_rows):
     return df
 
 
-def main():
+@click.command()
+@click.option('--valid-pairs-json', type=click.Path(exists=True),
+              default='/home/bonjae02/projects/promise-bench/data_eval/valid_pairs.json',
+              show_default=True, help='Path to valid_pairs.json')
+@click.option('--confbench-json', type=click.Path(exists=True),
+              default='/home/bonjae02/projects/promise-bench/data_eval/confbench_scores_valid_pairs.json',
+              show_default=True, help='Path to confbench_scores_valid_pairs.json')
+@click.option('--confbench-distogram-json', type=click.Path(exists=True),
+              default='/home/bonjae02/projects/promise-bench/data_eval/confbench_scores_distogram.json',
+              show_default=True, help='Path to confbench_scores_distogram.json')
+@click.option('--msa-pref-csv', type=click.Path(exists=True),
+              default='/home/bonjae02/projects/promise-bench/data_eval/per_pair_summary.csv',
+              show_default=True, help='Path to per_pair_summary.csv (MSA preference)')
+@click.option('--training-bias-dir', type=click.Path(exists=True, file_okay=False),
+              default='/home/bonjae02/projects/promise-bench/data_eval/train/training_bias',
+              show_default=True, help='Directory containing training bias JSON files')
+@click.option('--survived-clusters-json', type=click.Path(exists=True),
+              default='/home/bonjae02/projects/promise-bench/data_eval/survived_clusters_threshold60.json',
+              show_default=True, help='Path to survived_clusters_threshold60.json')
+@click.option('--output-dir', type=click.Path(),
+              default='/home/bonjae02/projects/promise-bench/data_eval/output',
+              show_default=True, help='Output directory for merged results')
+def main(valid_pairs_json, confbench_json, confbench_distogram_json,
+         msa_pref_csv, training_bias_dir, survived_clusters_json, output_dir):
     print("=" * 80)
     print("MERGE ALL VALID PAIR DATA (v3 - With Distogram ConfBench Scores)")
     print("=" * 80)
     
-    json_output, csv_rows = merge_all_data()
-    df = save_outputs(json_output, csv_rows)
+    json_output, csv_rows = merge_all_data(
+        valid_pairs_json, confbench_json, confbench_distogram_json,
+        msa_pref_csv, training_bias_dir, survived_clusters_json
+    )
+    df = save_outputs(json_output, csv_rows, output_dir)
     
     # Quick stats
     print("\n" + "=" * 80)
