@@ -17,22 +17,15 @@ import os
 import re
 import json
 import copy
-import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import click
 from Bio.PDB import MMCIFParser, PDBIO, Select
 from Bio.PDB.MMCIF2Dict import MMCIF2Dict
 
-
-# ============================================================================
-# Configuration
-# ============================================================================
-
-DEFAULT_OUTPUT_DIR = "data/eval/renumbered_pdbs"
-DEFAULT_MSA_DIR = "data/msas"
-DEFAULT_REP_SEQ_PATH = "data/rep_seq.json"
-DEFAULT_ANSWER_MAP_PATH = "data/dataset/seq_cluster_to_answer_map.json"
+from utils._config import pipeline_cfg as C
+from utils._config import eval_cfg as E
 
 AA_3TO1 = {
     'ALA': 'A', 'CYS': 'C', 'ASP': 'D', 'GLU': 'E', 'PHE': 'F',
@@ -501,78 +494,83 @@ def discover_clusters(targets_dir: str) -> List[Tuple[str, str]]:
 # CLI
 # ============================================================================
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="CIF to Renumbered PDB Converter")
-    
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument("--targets-dir", type=str, help="examples/targets directory")
-    input_group.add_argument("--input", "-i", type=str, help="Input CIF file")
-    
-    parser.add_argument("--cluster", type=str, help="Cluster ID (required with --input)")
-    parser.add_argument("--set", type=str, help="Set name (required with --input)")
-    
-    parser.add_argument("--output-dir", "-o", type=str, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--msa-dir", type=str, default=DEFAULT_MSA_DIR)
-    parser.add_argument("--rep-seq", type=str, default=DEFAULT_REP_SEQ_PATH)
-    parser.add_argument("--answer-map", type=str, default=DEFAULT_ANSWER_MAP_PATH)
-    
-    return parser.parse_args()
+@click.command()
+@click.option('--targets-dir', type=click.Path(exists=True), default=None,
+              help='examples/targets directory')
+@click.option('--input', '-i', 'input_cif', type=click.Path(exists=True), default=None,
+              help='Input CIF file')
+@click.option('--cluster', type=str, default=None,
+              help='Cluster ID (required with --input)')
+@click.option('--set', 'set_name', type=str, default=None,
+              help='Set name (required with --input)')
+@click.option('--output-dir', '-o', type=click.Path(),
+              default=str(E.dir('renumbered_pdbs')),
+              show_default=True, help='Output directory for renumbered PDBs')
+@click.option('--msa-dir', type=click.Path(exists=True),
+              default=str(C.dir('msas')),
+              show_default=True, help='MSA directory')
+@click.option('--rep-seq', type=click.Path(exists=True),
+              default=str(C.file('rep_seq')),
+              show_default=True, help='Path to rep_seq.json')
+@click.option('--answer-map', type=click.Path(exists=True),
+              default=str(C.file('answer_map')),
+              show_default=True, help='Path to answer_map.json')
+def main(targets_dir, input_cif, cluster, set_name, output_dir, msa_dir,
+         rep_seq, answer_map):
+    """CIF to Renumbered PDB Converter for ProMiSE-bench."""
+    if not targets_dir and not input_cif:
+        raise click.UsageError('One of --targets-dir or --input is required.')
 
-
-def main():
-    args = parse_args()
-    
     # Load data files
     print("Loading data files...")
-    
-    with open(args.rep_seq) as f:
+
+    with open(rep_seq) as f:
         rep_seq_data = json.load(f)
     print(f"  rep_seq: {len(rep_seq_data)} clusters")
-    
-    with open(args.answer_map) as f:
+
+    with open(answer_map) as f:
         answer_map_data = json.load(f)
     total_clusters = sum(len(v) for v in answer_map_data.values())
     print(f"  answer_map: {total_clusters} clusters")
-    
+
     # Discover or use specified clusters
-    if args.targets_dir:
-        clusters = discover_clusters(args.targets_dir)
-        print(f"\nFound {len(clusters)} clusters in {args.targets_dir}")
+    if targets_dir:
+        clusters = discover_clusters(targets_dir)
+        print(f"\nFound {len(clusters)} clusters in {targets_dir}")
     else:
-        if not args.cluster or not args.set:
-            print("ERROR: --cluster and --set required with --input")
-            return 1
-        clusters = [(args.set, args.cluster)]
-    
+        if not cluster or not set_name:
+            raise click.UsageError('--cluster and --set are required with --input.')
+        clusters = [(set_name, cluster)]
+
     # Process clusters
     success_total = 0
     fail_total = 0
-    
-    for set_name, cluster_id in clusters:
-        targets_dir = args.targets_dir if args.targets_dir else str(Path(args.input).parent.parent.parent)
-        
+
+    for sn, cid in clusters:
+        tdir = targets_dir if targets_dir else str(Path(input_cif).parent.parent.parent)
+
         results = process_cluster(
-            cluster_id=cluster_id,
-            set_name=set_name,
-            targets_dir=targets_dir,
-            msa_dir=args.msa_dir,
+            cluster_id=cid,
+            set_name=sn,
+            targets_dir=tdir,
+            msa_dir=msa_dir,
             rep_seq_data=rep_seq_data,
             answer_map_data=answer_map_data,
-            output_dir=args.output_dir
+            output_dir=output_dir,
         )
-        
+
         success_total += sum(1 for v in results.values() if v)
         fail_total += sum(1 for v in results.values() if not v)
-    
+
     # Summary
     print(f"\n{'#'*60}")
     print("SUMMARY")
     print(f"{'#'*60}")
     print(f"Success: {success_total}")
     print(f"Failed: {fail_total}")
-    
-    return 0 if fail_total == 0 else 1
+
+    raise SystemExit(0 if fail_total == 0 else 1)
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()

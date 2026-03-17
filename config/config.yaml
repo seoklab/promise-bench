@@ -57,6 +57,8 @@ pipeline:
     representative_sequences: representative_sequences.json
     binding_site_compatibility: binding_site_compatibility.csv
     excluded_ccd_codes: excluded_ccd_codes.txt
+    rep_seq: rep_seq.json
+    answer_map: dataset/seq_cluster_to_answer_map.json
     ligand_clusters: /home.galaxy4/seeun/works/projects/casp-pipe/data/cluster-lig_ccd/cutoff_0.4.json
 
 # =====================================================================
@@ -75,6 +77,8 @@ eval:
 
     # msa
     msa: msa
+    renumbered_pdbs: msa/renumbered_pdbs
+    esm_contacts: msa/esm_contacts
 
     # distogram
     distogram: distogram
@@ -97,6 +101,7 @@ eval:
 
     # msa preference
     msa_pref_csv: per_pair_summary.csv
+    msa_bias_csv: msa/msa_bias_results.csv
 
     # merged outputs
     merged_json: merged_valid_pairs_data.json

@@ -28,22 +28,14 @@ import re
 import csv
 import glob
 import json
-import argparse
 from typing import Dict, List, Optional, Tuple
 
+import click
 import numpy as np
 from Bio.PDB import PDBParser, Selection
 from scipy.spatial import distance_matrix
 
-
-# ============================================================================
-# Configuration
-# ============================================================================
-
-DEFAULT_PDB_DIR = "data/eval/renumbered_pdbs"
-DEFAULT_ESM_DIR = "data/eval/msas"
-DEFAULT_VALID_PAIRS = "data/dataset/valid_pairs.json"
-DEFAULT_OUTPUT = "data/eval/msa_bias_results.csv"
+from utils._config import eval_cfg as E
 
 CONTACT_CUTOFF = 8.0  # Angstroms
 DIAG_EXCLUSION = 3    # Exclude contacts within ±3 residues
@@ -242,74 +234,67 @@ def order_pair(tag1: str, tag2: str, set_name: str) -> Tuple[str, str]:
 # CLI
 # ============================================================================
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="MSA Bias Analysis for ProMiSE-bench",
-    )
-    parser.add_argument(
-        "--valid-pairs", type=str, default=DEFAULT_VALID_PAIRS,
-        help="Path to valid_pairs.json",
-    )
-    parser.add_argument(
-        "--pdb-dir", type=str, default=DEFAULT_PDB_DIR,
-        help="Renumbered PDB directory (from cif_to_renumbered_pdb)",
-    )
-    parser.add_argument(
-        "--esm-dir", type=str, default=DEFAULT_ESM_DIR,
-        help="ESM contact prediction directory (from esm_run)",
-    )
-    parser.add_argument(
-        "-o", "--output", type=str, default=DEFAULT_OUTPUT,
-        help="Output CSV path",
-    )
-    parser.add_argument("--set-name", type=str, default=None,
-                        help="Process only this set")
-    parser.add_argument("--cluster", type=str, default=None,
-                        help="Process only this cluster")
-    args = parser.parse_args()
-
-    with open(args.valid_pairs) as f:
-        valid_pairs = json.load(f)
+@click.command()
+@click.option('--valid-pairs', type=click.Path(exists=True),
+              default=str(E.file('valid_pairs')),
+              show_default=True, help='Path to valid_pairs.json')
+@click.option('--pdb-dir', type=click.Path(exists=True),
+              default=str(E.dir('renumbered_pdbs')),
+              show_default=True, help='Renumbered PDB directory')
+@click.option('--esm-dir', type=click.Path(exists=True),
+              default=str(E.dir('esm_contacts')),
+              show_default=True, help='ESM contact prediction directory')
+@click.option('-o', '--output', type=click.Path(),
+              default=str(E.file('msa_bias_csv')),
+              show_default=True, help='Output CSV path')
+@click.option('--set-name', type=str, default=None,
+              help='Process only this set')
+@click.option('--cluster', type=str, default=None,
+              help='Process only this cluster')
+def main(valid_pairs, pdb_dir, esm_dir, output, set_name, cluster):
+    """MSA Bias Analysis for ProMiSE-bench."""
+    with open(valid_pairs) as f:
+        valid_pairs_data = json.load(f)
 
     print(f"{'#'*60}")
     print("MSA Bias Analysis")
     print(f"{'#'*60}")
-    print(f"PDB dir : {args.pdb_dir}")
-    print(f"ESM dir : {args.esm_dir}")
-    print(f"Output  : {args.output}")
+    print(f"PDB dir : {pdb_dir}")
+    print(f"ESM dir : {esm_dir}")
+    print(f"Output  : {output}")
 
     rows = []
 
-    for set_name in SET_NAMES:
-        if args.set_name and args.set_name != set_name:
+    for sn in SET_NAMES:
+        if set_name and set_name != sn:
             continue
 
-        set_data = valid_pairs.get(set_name, {})
+        set_data = valid_pairs_data.get(sn, {})
         if not set_data:
             continue
 
         print(f"\n{'='*60}")
-        print(f"{set_name}  ({len(set_data)} clusters)")
+        print(f"{sn}  ({len(set_data)} clusters)")
         print(f"{'='*60}")
 
         for cluster_id, pairs in set_data.items():
-            if args.cluster and args.cluster != cluster_id:
+            if cluster and cluster != cluster_id:
                 continue
 
             # Normalize: single pair may not be double-nested
             if isinstance(pairs[0], str):
                 pairs = [pairs]
 
-            esm_files = find_esm_files(args.esm_dir, cluster_id)
+            esm_files = find_esm_files(esm_dir, cluster_id)
             if not esm_files:
                 print(f"  {cluster_id}: no ESM files, skipping")
                 continue
 
             for pair in pairs:
-                conf1, conf2 = order_pair(pair[0], pair[1], set_name)
+                conf1, conf2 = order_pair(pair[0], pair[1], sn)
 
-                pdb1 = find_pdb(conf1, args.pdb_dir, set_name, cluster_id)
-                pdb2 = find_pdb(conf2, args.pdb_dir, set_name, cluster_id)
+                pdb1 = find_pdb(conf1, pdb_dir, sn, cluster_id)
+                pdb2 = find_pdb(conf2, pdb_dir, sn, cluster_id)
 
                 if not pdb1 or not pdb2:
                     missing = []
@@ -341,7 +326,7 @@ def main():
                         "conf2_unique_count": result["conf2_unique_count"],
                         "seed": seed,
                         "cluster_id": cluster_id,
-                        "set_name": set_name,
+                        "set_name": sn,
                     })
 
                 print(f"  {cluster_id}: {conf1} vs {conf2}  "
@@ -349,17 +334,17 @@ def main():
 
     # ---- Save CSV ----
     if rows:
-        os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
         fieldnames = [
             "conf1_name", "conf2_name", "msa_pref",
             "common_count", "conf1_unique_count", "conf2_unique_count",
             "seed", "cluster_id", "set_name",
         ]
-        with open(args.output, "w", newline="") as f:
+        with open(output, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-        print(f"\nSaved {len(rows)} rows → {args.output}")
+        print(f"\nSaved {len(rows)} rows → {output}")
     else:
         print("\nNo results produced.")
 
@@ -375,8 +360,6 @@ def main():
               f"mean_pref={np.mean(prefs):+.3f} ± {np.std(prefs):.3f}")
     print(f"{'#'*60}")
 
-    return 0
-
 
 if __name__ == "__main__":
-    exit(main())
+    main()

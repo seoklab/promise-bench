@@ -17,11 +17,11 @@ Usage:
 
 import sys
 import os
-import argparse
 import string
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import click
 import numpy as np
 import torch
 from Bio import SeqIO
@@ -29,12 +29,14 @@ from scipy.spatial.distance import cdist
 
 import esm
 
+from utils._config import eval_cfg as E
+
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
-DEFAULT_OUTPUT_DIR = "data/eval/msas"
+DEFAULT_OUTPUT_DIR = str(E.dir('esm_contacts'))
 DEFAULT_SAMPLE_SIZE = 1024
 DEFAULT_NUM_SEQS = 128
 DEFAULT_SEED = 42
@@ -212,81 +214,86 @@ def discover_a3m_files(examples_dir: str) -> List[Path]:
 # CLI
 # ============================================================================
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="ESM-MSA-1b Contact Prediction")
-    
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument("--examples-dir", type=str, help="examples/msa-server directory")
-    input_group.add_argument("--input", "-i", type=str, nargs="+", help="Input a3m file(s)")
-    
-    parser.add_argument("--output-dir", "-o", type=str, default=DEFAULT_OUTPUT_DIR)
-    parser.add_argument("--sample-size", "-s", type=int, default=DEFAULT_SAMPLE_SIZE)
-    parser.add_argument("--num-seqs", "-n", type=int, default=DEFAULT_NUM_SEQS)
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--multi-seed", action="store_true", help=f"Use seeds: {DEFAULT_SEEDS}")
-    parser.add_argument("--seeds", type=int, nargs="+", help="Custom seeds")
-    parser.add_argument("--skip-existing", action="store_true")
-    parser.add_argument("--device", "-d", type=str, default=DEFAULT_DEVICE, choices=["cuda", "cpu"])
-    
-    return parser.parse_args()
+@click.command()
+@click.option('--examples-dir', type=click.Path(exists=True), default=None,
+              help='examples/msa-server directory')
+@click.option('--input', '-i', 'input_files', type=click.Path(exists=True),
+              multiple=True, help='Input a3m file(s)')
+@click.option('--output-dir', '-o', type=click.Path(),
+              default=DEFAULT_OUTPUT_DIR,
+              show_default=True, help='Output directory')
+@click.option('--sample-size', '-s', type=int, default=DEFAULT_SAMPLE_SIZE,
+              show_default=True)
+@click.option('--num-seqs', '-n', type=int, default=DEFAULT_NUM_SEQS,
+              show_default=True)
+@click.option('--seed', type=int, default=DEFAULT_SEED,
+              show_default=True)
+@click.option('--multi-seed', is_flag=True,
+              help=f'Use seeds: {DEFAULT_SEEDS}')
+@click.option('--seeds', type=int, multiple=True,
+              help='Custom seeds')
+@click.option('--skip-existing', is_flag=True)
+@click.option('--device', '-d', type=click.Choice(['cuda', 'cpu']),
+              default=DEFAULT_DEVICE, show_default=True)
+def main(examples_dir, input_files, output_dir, sample_size, num_seqs,
+         seed, multi_seed, seeds, skip_existing, device):
+    """ESM-MSA-1b Contact Prediction for ProMiSE-bench."""
+    if not examples_dir and not input_files:
+        raise click.UsageError('One of --examples-dir or --input is required.')
 
-
-def main():
-    args = parse_args()
-    
     # Collect input files
-    if args.examples_dir:
-        input_files = discover_a3m_files(args.examples_dir)
+    if examples_dir:
+        a3m_files = discover_a3m_files(examples_dir)
     else:
-        input_files = [Path(f) for f in args.input if Path(f).exists()]
-    
-    if not input_files:
-        print("ERROR: No input files found!")
-        return 1
-    
+        a3m_files = [Path(f) for f in input_files if Path(f).exists()]
+
+    if not a3m_files:
+        raise click.ClickException('No input files found!')
+
     # Seeds
-    if args.seeds:
-        seeds = args.seeds
-    elif args.multi_seed:
-        seeds = DEFAULT_SEEDS
+    if seeds:
+        seed_list = list(seeds)
+    elif multi_seed:
+        seed_list = DEFAULT_SEEDS
     else:
-        seeds = [args.seed]
-    
+        seed_list = [seed]
+
     print(f"\n{'#'*60}")
     print(f"ESM-MSA-1b Contact Prediction")
     print(f"{'#'*60}")
-    print(f"Files: {len(input_files)}, Seeds: {seeds}, Device: {args.device}")
-    print(f"Output: {args.output_dir}")
-    
-    predictor = ESMMSAPredictor(device=args.device)
-    
-    success, skip, fail = 0, 0, 0
-    
-    for a3m_path in input_files:
-        output_dir = Path(args.output_dir)
-        
-        for seed in seeds:
-            if args.skip_existing:
-                output_npy = output_dir / f"{a3m_path.stem}_seed{seed}_n{args.sample_size}_contacts.npy"
+    print(f"Files: {len(a3m_files)}, Seeds: {seed_list}, Device: {device}")
+    print(f"Output: {output_dir}")
+
+    predictor = ESMMSAPredictor(device=device)
+
+    success, skip_cnt, fail = 0, 0, 0
+
+    for a3m_path in a3m_files:
+        out_dir = Path(output_dir)
+
+        for s in seed_list:
+            if skip_existing:
+                output_npy = out_dir / f"{a3m_path.stem}_seed{s}_n{sample_size}_contacts.npy"
                 if output_npy.exists():
-                    skip += 1
+                    skip_cnt += 1
                     continue
-            
+
             try:
                 result = process_a3m_file(
-                    str(a3m_path), str(output_dir), predictor,
-                    args.sample_size, args.num_seqs, seed
+                    str(a3m_path), str(out_dir), predictor,
+                    sample_size, num_seqs, s,
                 )
                 success += 1 if result is not None else 0
                 fail += 0 if result is not None else 1
             except Exception as e:
                 print(f"ERROR: {e}")
                 fail += 1
-    
+
     print(f"\n{'#'*60}")
-    print(f"Done! Success: {success}, Skip: {skip}, Fail: {fail}")
-    return 0 if fail == 0 else 1
+    print(f"Done! Success: {success}, Skip: {skip_cnt}, Fail: {fail}")
+
+    raise SystemExit(0 if fail == 0 else 1)
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()
