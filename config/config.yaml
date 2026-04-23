@@ -60,7 +60,18 @@ pipeline:
     rep_seq: rep_seq.json
     answer_map: dataset/seq_cluster_to_answer_map.json
     ligand_clusters: /home.galaxy4/seeun/works/projects/casp-pipe/data/cluster-lig_ccd/cutoff_0.4.json
-
+  # make_pairs enrichment: MSA/chain/distogram paths. Use absolute paths
+  # or paths relative to the repo root. Set lists to try glob patterns in order
+  # ({method_type}, {cluster_id}, {yaml_tag} are substituted; intrinsic = dynamics).
+  distogram_enrich:
+    af3_chain_mappings: null
+    boltz_chain_mappings: null
+    chai_fasta_root: null
+    distogram:
+      boltz2: []
+      boltz1: []
+      af3: []
+      bioemu: []
 # =====================================================================
 # Evaluation
 # =====================================================================
