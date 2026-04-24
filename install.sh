@@ -9,6 +9,8 @@
 #   bash install.sh          # first-time setup
 #   bash install.sh --update # update existing envs
 #
+# Requires: conda/mamba, and uv (https://docs.astral.sh/uv/getting-started/installation/)
+#
 # After installation:
 #   conda activate promise
 #   promise_data run --spec spec.json --mmcif-store /path/to/mmcif_files
@@ -35,10 +37,15 @@ echo "[2/3] Creating 'prodigy-cryst' conda environment..."
 conda env update --name prodigy-cryst --file environment-prodigy.yaml --prune
 echo "  OK: prodigy-cryst environment ready"
 
-# 3. Install promise-data package into the promise environment
+# 3. Install promise-data package into the promise environment (uv)
 echo ""
-echo "[3/3] Installing promise-data CLI..."
-conda run -n promise pip install -e "$PROJECT_ROOT"
+echo "[3/3] Installing promise-data CLI with uv..."
+if ! command -v uv >/dev/null 2>&1; then
+  echo "  ERROR: uv is not installed. Install it from https://docs.astral.sh/uv/getting-started/installation/"
+  exit 1
+fi
+UV_PYTHON="$(conda run -n promise which python)"
+uv pip install --python "$UV_PYTHON" -e "$PROJECT_ROOT"
 echo "  OK: promise_data command installed"
 
 echo ""

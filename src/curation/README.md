@@ -108,7 +108,6 @@ python -m curation.curate_sets --help
 ```
 src/curation/
 │
-├── __init__.py
 ├── __main__.py                     
 ├── run.py                          
 │

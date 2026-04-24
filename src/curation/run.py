@@ -1,6 +1,6 @@
 """CLI entry point for promise-bench data curation.
 
-Install the package (``pip install -e .``) then run::
+Install the package (``uv pip install -e .`` or ``pip install -e .``) then run::
 
     promise_data run --spec spec.json --mmcif-store /path/to/mmcif_files
 

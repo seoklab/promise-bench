@@ -30,3 +30,5 @@ promise_data = "curation.run:promise_data"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+namespaces = true
+exclude = ["*.egg-info", "*_egg_info*"]

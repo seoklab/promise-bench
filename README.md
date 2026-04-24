@@ -26,9 +26,11 @@ cd ProMiSE-bench
 bash install.sh
 ```
 
-This creates two conda environments:
+This script requires [uv](https://docs.astral.sh/uv/getting-started/installation/) (used to install the editable `promise-data` package into the conda env). It creates two conda environments:
 - `promise`: Main curation pipeline (Python 3.9+)
 - `prodigy-cryst`: Crystal contact classifier (Python 3.8, used internally)
+
+To install only the Python package and dependencies into a local virtualenv (for example when reproducing eval scripts), run `uv sync` from the repository root, or `uv pip install -e .` into an existing environment. The full curation pipeline still expects the conda-provided tools (FAMSA, Foldseek, MMseqs2, and so on) from `environment.yaml`.
 
 
 ## Usage
