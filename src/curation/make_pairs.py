@@ -5,6 +5,8 @@ make_pairs.py - Generate seq_cluster_to_answer_map.json and valid_pairs.json
 Usage:
     python -m curation.make_pairs
     python -m curation.make_pairs --csv-dir data/dataset --outdir data/dataset --examples-dir examples
+
+Next (alignment task JSON): ``python -m curation.generate_alignment_tasks --help``.
 """
 
 import json

@@ -2,13 +2,14 @@
 """
 Generate alignment tasks from valid_pairs.json + enriched seq_cluster map JSON.
 
-Driven by valid_pairs (model_entity / apo_model_entity / holo_model_entity); prediction
-glob patterns and distogram fields come from the map produced by
-``python -m curation.make_pairs`` (or equivalent enriched JSON).
+Lives under ``curation`` with ``make_pairs``: both prepare inputs for the alignment
+pipeline. This script is driven by valid_pairs (model_entity / apo_model_entity /
+holo_model_entity); prediction glob patterns and cluster fields come from the map
+produced by ``python -m curation.make_pairs`` (or equivalent enriched JSON).
 
 Usage::
 
-  python -m eval.align.generate_alignment_tasks --help
+  python -m curation.generate_alignment_tasks --help
 
 Install the project first (for example ``uv sync``, ``uv pip install -e .``, or ``bash install.sh``).
 

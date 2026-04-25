@@ -154,7 +154,7 @@ def main() -> None:
         "-i",
         type=str,
         default=str(default_input),
-        help="alignment_tasks.json from generate_alignment_tasks",
+        help="alignment_tasks.json from curation.generate_alignment_tasks",
     )
     p.add_argument(
         "--parts",
