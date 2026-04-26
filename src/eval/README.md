@@ -8,6 +8,89 @@ Below: **what runs where**, **inputs → outputs**, and **recommended order**. P
 
 ---
 
+## Recommended run order (end-to-end)
+
+This section is the **sequential** “do this, then that” ordering for a fresh run.
+Some branches can run in parallel on a cluster, but the dependencies below must hold.
+
+### Step 1 — Curation (required)
+
+1. Generate the base pair definitions and enriched map:
+
+   - `python -m curation.make_pairs`
+
+   Outputs (you will use these later):
+   - `valid_pairs.json`
+   - enriched `seq_cluster_to_answer_map` JSON
+
+### Step 2 — Distogram task preparation (required for both §3 and §4)
+
+2. (Optional but common) Materialize per-reference Cβ coordinate JSONs from a distogram-analysis JSON:
+
+   - `python -m eval.distogram.extract_reference_cb --distogram <distogram_analysis.json>`
+
+   Output:
+   - augmented distogram JSON (`*_with_cb_paths.json`) that adds `reference_cb_json`
+
+3. Build the distogram symlink tree and generate `distogram_tasks.json`:
+
+   - `python -m eval.distogram.collect_distograms --json <distogram_analysis_with_cb_paths.json> ...`
+
+   Outputs:
+   - a `distogram/...` symlink tree under your chosen output dir
+   - `distogram_tasks.json` (when task-generation flags are enabled; see `--help`)
+
+**Note:** `distogram_tasks.json` is a key dependency for **Struct reference↔reference metrics** (§3.1).
+
+### Step 3 — Alignment (required for structure-based ConfBench; optional otherwise)
+
+4. Author alignment tasks:
+
+   - `python -m eval.align.generate_alignment_tasks ...`
+
+   Output:
+   - `alignment_tasks.json`
+
+5. Run alignment in shards (recommended) or directly:
+
+   - `python -m eval.align.split_alignment_jobs ...` → generates `run_all.sh` / `sbatch` scripts
+   - each shard runs `python -m eval.align.struct_align_batch --json alignment_tasks_partXXXX.json --results-json align_partXXXX.json`
+
+   Outputs:
+   - `align_part*.json` (prediction↔reference metrics)
+
+### Step 4 — Struct scoring (required for `merge_all`)
+
+6. Compute reference↔reference structural metrics (requires `distogram_tasks.json` from Step 2):
+
+   - `python -m eval.struct.calc_reference_structural_metrics --tasks <distogram_tasks.json> --output-dir <reference_metrics>`
+
+7. Compute structure-based ConfBench scores (requires alignment results from Step 3):
+
+   - `python -m eval.struct.calc_confbench_score_valid_pairs --align-results <job_batches>/align_results --ref-metrics-dir <reference_metrics>`
+
+   Output:
+   - `confbench_scores_valid_pairs.json` (plus summary CSV / validation report)
+
+### Step 5 — Distogram scoring (required for `merge_all`)
+
+8. Run distogram loss and downstream steps (often sharded with `--start/--end`):
+
+   - `python -m eval.distogram.calc_distogram_loss --tasks <distogram_tasks.json> ...`
+   - `python -m eval.distogram.calc_reference_distogram_diff --tasks <distogram_tasks.json> ...`
+   - `python -m eval.distogram.calc_distogram_confbench ...`
+
+   Output:
+   - `confbench_scores_distogram.json` (for `eval.merge_all --confbench-distogram-json`)
+
+### Step 6 — Merge (optional; paper analysis)
+
+9. Merge all metrics into final JSON/CSV:
+
+   - `python -m eval.merge_all --valid-pairs-json ... --confbench-json ... --confbench-distogram-json ... --msa-pref-csv ...`
+
+---
+
 ## 1. Curation (`src/curation/`)
 
 Run **in this order**.
@@ -64,6 +147,8 @@ To produce reference↔reference metrics (e.g. CA RMSD) used by downstream struc
 ConfBench scoring, run:
 
 - `python -m eval.struct.calc_reference_structural_metrics --tasks <distogram_tasks.json> --output-dir <reference_metrics>`
+
+This step requires `distogram_tasks.json` (authored by `eval.distogram.collect_distograms`).
 
 This writes per-pair `*_metrics.json` under `<reference_metrics>/aligned_references/...`.
 
@@ -163,7 +248,7 @@ If CLI paths are omitted, defaults come from `config/config.yaml` (`eval` sectio
 
 | Module | Role |
 |--------|------|
-| `eval/distogram/extract_reference_cb` | Reference Cβ extraction (either from alignment task JSON or a legacy distogram-analysis JSON) |
+| `eval/distogram/extract_reference_cb` | Reference Cβ extraction from a distogram-analysis JSON (adds `reference_cb_json` paths for downstream tasks) |
 | `eval/distogram/collect_distograms` | Symlink distograms into a tree; emit `distogram_tasks.json` |
 | `eval/distogram/calc_distogram_loss` | Prediction vs reference distogram loss |
 | `eval/distogram/calc_reference_distogram_diff` | Pairwise reference distogram differences |
