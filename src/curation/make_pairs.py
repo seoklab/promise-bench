@@ -6,7 +6,9 @@ Usage:
     python -m curation.make_pairs
     python -m curation.make_pairs --csv-dir data/dataset --outdir data/dataset --examples-dir examples
 
-Next (alignment task JSON): ``python -m curation.generate_alignment_tasks --help``.
+Next: alignment tasks — ``python -m eval.align.generate_alignment_tasks --help``.
+Distogram eval consumes this same enriched map (optionally after
+``python -m eval.distogram.extract_reference_cb --distogram …`` for ``reference_cb_json``).
 """
 
 import json

@@ -1,27 +1,28 @@
 #!/usr/bin/env python3
 """
-Generate alignment tasks from valid_pairs.json + enriched seq_cluster map JSON.
+Generate alignment tasks from ``valid_pairs.json`` + enriched seq_cluster map JSON.
 
-Lives under ``curation`` with ``make_pairs``: both prepare inputs for the alignment
-pipeline. This script is driven by valid_pairs (model_entity / apo_model_entity /
-holo_model_entity); prediction glob patterns and cluster fields come from the map
-produced by ``python -m curation.make_pairs`` (or equivalent enriched JSON).
+This module **lives under ``eval/align``**: it writes the alignment task JSON that is
+later sharded by ``eval.align.split_alignment_jobs`` and executed by
+``eval.align.nurikit_align_batch``.
 
-Usage::
+Inputs
+------
+- ``valid_pairs.json``: produced by ``python -m curation.make_pairs``.
+- enriched seq_cluster map JSON (a.k.a. ``seq_cluster_to_answer_map``): also produced by
+  ``python -m curation.make_pairs``.
 
-  python -m curation.generate_alignment_tasks --help
+Usage
+-----
 
-Install the project first (for example ``uv sync``, ``uv pip install -e .``, or ``bash install.sh``).
-
-Next: shard tasks with ``python -m eval.align.split_alignment_jobs``, then run the
-generated ``run_all.sh`` or SLURM scripts (each shard calls ``nurikit_align_batch``).
+  python -m eval.align.generate_alignment_tasks --help
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import glob
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -79,6 +80,7 @@ def extract_file_info(file_path: Path, method: str, yaml_tag: str) -> Dict[str, 
     Prediction chain for alignment comes from distogram_data target_chain; actual_chain
     here is only a fallback from the yaml tag (no external mapping JSON required).
     """
+
     actual_yaml_tag = yaml_tag
     seed = None
     sample = None
@@ -104,9 +106,7 @@ def extract_file_info(file_path: Path, method: str, yaml_tag: str) -> Dict[str, 
             if part.startswith("seed_"):
                 seed = part.split("_")[1] if "_" in part else part
                 break
-        sample = (
-            file_path.stem.split("_")[-1] if "model_idx_" in file_path.stem else "1"
-        )
+        sample = file_path.stem.split("_")[-1] if "model_idx_" in file_path.stem else "1"
     elif method == "bioemu":
         sample = file_path.stem.split("_")[-1] if "_" in file_path.stem else "1"
 
@@ -244,9 +244,7 @@ def generate_alignment_tasks(
                             print(f"    {method}: No files for pattern {pattern}")
                             continue
 
-                        print(
-                            f"    {method} -> {reference}: {len(pred_files)} prediction(s)"
-                        )
+                        print(f"    {method} -> {reference}: {len(pred_files)} prediction(s)")
 
                         for mobile_yaml in mobiles:
                             mobile_cif = find_reference_cif(mobile_yaml, cif_root)
@@ -266,54 +264,31 @@ def generate_alignment_tasks(
 
                             for pred_file in pred_files:
                                 pred_path = Path(pred_file)
-                                file_info = extract_file_info(
-                                    pred_path, method, yaml_tag or ""
-                                )
+                                file_info = extract_file_info(pred_path, method, yaml_tag or "")
                                 mobile_chain = target_chain
-                                actual_yaml_tag = file_info.get(
-                                    "actual_yaml_tag", yaml_tag
-                                )
+                                actual_yaml_tag = file_info.get("actual_yaml_tag", yaml_tag)
                                 seed_str = (
-                                    f"seed_{file_info['seed']}"
-                                    if file_info["seed"]
-                                    else "seed_unknown"
+                                    f"seed_{file_info['seed']}" if file_info["seed"] else "seed_unknown"
                                 )
                                 sample_str = (
-                                    f"model_{file_info['sample']}"
-                                    if file_info["sample"]
-                                    else "model_1"
+                                    f"model_{file_info['sample']}" if file_info["sample"] else "model_1"
                                 )
                                 mobile_parts = mobile_yaml.split("_")
                                 if len(mobile_parts) >= 3:
                                     mobile_asm_name = (
-                                        f"{mobile_parts[0]}_asm{mobile_parts[1]}_"
-                                        f"{mobile_parts[2]}"
+                                        f"{mobile_parts[0]}_asm{mobile_parts[1]}_{mobile_parts[2]}"
                                     )
                                 else:
                                     mobile_asm_name = mobile_yaml
 
+                                output_subdir = (
+                                    Path(output_dir) / method / pair_type / cluster_id / reference
+                                )
                                 if method == "bioemu":
-                                    output_subdir = (
-                                        Path(output_dir)
-                                        / method
-                                        / pair_type
-                                        / cluster_id
-                                        / reference
-                                    )
-                                    output_filename = (
-                                        f"{sample_str}_aligned_to_{mobile_asm_name}.cif"
-                                    )
+                                    output_filename = f"{sample_str}_aligned_to_{mobile_asm_name}.cif"
                                 else:
-                                    output_subdir = (
-                                        Path(output_dir)
-                                        / method
-                                        / pair_type
-                                        / cluster_id
-                                        / reference
-                                    )
                                     output_filename = (
-                                        f"{seed_str}_{actual_yaml_tag}_{sample_str}_"
-                                        f"aligned_to_{mobile_asm_name}.cif"
+                                        f"{seed_str}_{actual_yaml_tag}_{sample_str}_aligned_to_{mobile_asm_name}.cif"
                                     )
                                 output_path = output_subdir / output_filename
 
@@ -338,13 +313,9 @@ def generate_alignment_tasks(
                                         reference_state = "holo"
 
                                 target_conformation = (
-                                    find_conf_label(yaml_tag, cluster_data)
-                                    if yaml_tag
-                                    else "unknown"
+                                    find_conf_label(yaml_tag, cluster_data) if yaml_tag else "unknown"
                                 )
-                                reference_conformation = find_conf_label(
-                                    mobile_yaml, cluster_data
-                                )
+                                reference_conformation = find_conf_label(mobile_yaml, cluster_data)
 
                                 alignment_tasks.append(
                                     {
@@ -385,19 +356,9 @@ def generate_alignment_tasks(
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--valid-pairs", default=str(E.file("valid_pairs")))
-    p.add_argument(
-        "--distogram-data",
-        default=str(Path("data/dataset") / "seq_cluster_to_answer_map.json"),
-    )
-    p.add_argument(
-        "--output",
-        "-o",
-        default=str(E.dir("align") / "alignment_tasks.json"),
-    )
-    p.add_argument(
-        "--output-dir",
-        default=str(E.dir("align") / "aligned_cif"),
-    )
+    p.add_argument("--distogram-data", default=str(C.file("answer_map") or Path("seq_cluster_to_answer_map.json")))
+    p.add_argument("--output", "-o", default=str((E.dir("output") / "alignment_tasks.json").resolve()))
+    p.add_argument("--output-dir", default=str((E.dir("output") / "aligned_cif").resolve()))
     p.add_argument("--cif-dir", default=str(C.dir("cif_asms")))
     args = p.parse_args()
     generate_alignment_tasks(
@@ -411,3 +372,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
