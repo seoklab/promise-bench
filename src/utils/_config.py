@@ -14,6 +14,7 @@ Usage
     C.file("filtered_pairs") # -> Path("data/filtered-pairs.csv")
     E.dir("training_bias")   # -> Path("data_eval/train/training_bias")
     E.external("meta_data_dir")  # -> Path or None
+    E.distogram_msa_dir()       # -> Path (distogram CLI defaults; see EvalConfig)
 """
 
 from __future__ import annotations
@@ -142,10 +143,77 @@ class PipelineConfig(SectionConfig):
 
 
 class EvalConfig(SectionConfig):
-    """Eval accessor — no extra methods beyond the base."""
+    """Eval paths plus distogram CLI defaults (``eval.*`` / ``eval.external`` where needed; MSA and rep_seq from pipeline)."""
 
     def __init__(self) -> None:
         super().__init__("eval", "data_eval")
+
+    def distogram_msa_dir(self, cli: str | Path | None = None) -> Path:
+        if cli:
+            return Path(cli)
+        return pipeline_cfg.dir("msas")
+
+    def distogram_rep_seq_json(self, cli: str | Path | None = None) -> Path:
+        if cli:
+            return Path(cli)
+        p = pipeline_cfg.file("rep_seq")
+        if p is None:
+            raise FileNotFoundError(
+                "Representative sequences JSON: pass --rep-seq or set pipeline.files.rep_seq "
+                "in config/config.yaml"
+            )
+        return p
+
+    def distogram_ref_distogram_dir(self, cli: str | Path | None = None) -> Path:
+        if cli:
+            return Path(cli)
+        ext = self.external("ref_distogram_dir")
+        if ext is not None:
+            return ext
+        return self.dir("ref_distogram")
+
+    def distogram_ref_coords_dir(self, cli: str | Path | None = None) -> Path:
+        if cli:
+            return Path(cli)
+        ext = self.external("ref_coords_dir")
+        if ext is not None:
+            return ext
+        return self.dir("ref_coords")
+
+    def distogram_valid_pairs_path(self, cli: str | Path | None = None) -> Path:
+        if cli:
+            return Path(cli)
+        p = self.file("valid_pairs")
+        if p is None:
+            raise FileNotFoundError(
+                "valid_pairs: pass --valid-pairs or set eval.files.valid_pairs in config/config.yaml"
+            )
+        return p
+
+    def distogram_af3_chain_mapping_root(
+        self, cli: str | Path | None = None
+    ) -> Path | None:
+        if cli:
+            return Path(cli)
+        return self.external("af3_chain_mapping_root")
+
+    def distogram_collect_output_dir(self, cli: str | Path | None = None) -> Path:
+        if cli:
+            return Path(cli)
+        return self.dir("distogram")
+
+    def distogram_aligned_cif_dir(self, cli: str | Path | None = None) -> Path | None:
+        if cli:
+            return Path(cli)
+        return self.external("aligned_cif_dir")
+
+    def distogram_tasks_path(self, cli: str | Path | None = None) -> Path:
+        if cli:
+            return Path(cli)
+        p = self.file("distogram_tasks")
+        if p is not None:
+            return p
+        return self.dir("distogram") / "distogram_tasks.json"
 
 
 # =====================================================================
