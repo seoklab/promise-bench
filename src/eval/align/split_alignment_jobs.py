@@ -2,7 +2,7 @@
 """Split alignment_tasks.json into shards; emit local run_all.sh and/or SLURM sbatch scripts.
 
 Input JSON is produced by ``python -m eval.align.generate_alignment_tasks``.
-Each shard runs ``python -m eval.align.nurikit_align_batch``.
+Each shard runs ``python -m eval.align.struct_align_batch``.
 
 ``--emit local`` runs shards sequentially on this host; ``--emit sbatch`` emits SLURM
 only; ``--emit both`` (default) generates both.
@@ -32,7 +32,7 @@ def split_and_generate_jobs(
     *,
     python_exe: str,
     log_dir: Path,
-    nurikit_write_cif: bool,
+    write_cif: bool,
 ) -> None:
     input_json = str(Path(input_json).resolve())
     log_dir = log_dir.resolve()
@@ -81,16 +81,16 @@ def split_and_generate_jobs(
         json_files.append(json_path.resolve())
         print(f"  Part {i + 1}: {len(part_tasks)} tasks -> {json_path}")
 
-    results_dir = output_dir / "nurikit_results"
+    results_dir = output_dir / "align_results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    wc = " --no-write-cif" if not nurikit_write_cif else ""
+    wc = " --no-write-cif" if not write_cif else ""
 
     def one_local_line(jp: Path, part_idx: int) -> str:
         part_num = str(part_idx + 1).zfill(4)
-        rp = (results_dir / f"nurikit_part{part_num}.json").resolve()
+        rp = (results_dir / f"align_part{part_num}.json").resolve()
         return (
-            f"{python_exe} -m eval.align.nurikit_align_batch "
+            f"{python_exe} -m eval.align.struct_align_batch "
             f"--json {jp} --results-json {rp}{wc}\n"
         )
 
@@ -101,7 +101,7 @@ def split_and_generate_jobs(
         run_script_path = output_dir / "run_all.sh"
         with open(run_script_path, "w") as f:
             f.write("#!/bin/bash\n")
-            f.write("# Run NuriKit alignment shards sequentially (no scheduler).\n")
+            f.write("# Run alignment shards sequentially (no scheduler).\n")
             f.write(f"# Total tasks: {total_tasks}, shards: {len(json_files)}\n\n")
             f.write("set -euo pipefail\n\n")
             for idx, jp in enumerate(json_files):
@@ -215,7 +215,7 @@ def main() -> None:
         sbatch_cpus=args.sbatch_cpus,
         python_exe=args.python,
         log_dir=args.log_dir,
-        nurikit_write_cif=args.write_cif,
+        write_cif=args.write_cif,
     )
 
 

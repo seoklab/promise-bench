@@ -1,6 +1,6 @@
 """Extract CA coordinates from mmCIF (foundation ``extract_ca_from_cif`` logic).
 
-Used by ``nurikit_align_batch`` so ``seq_id_to_coord`` keys match step6 / a3m mapping.
+Used by ``struct_align_batch`` so ``seq_id_to_coord`` keys match step6 / a3m mapping.
 """
 
 from __future__ import annotations

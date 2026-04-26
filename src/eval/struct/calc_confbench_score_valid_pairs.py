@@ -4,13 +4,13 @@ ConfBench score calculation for valid pairs (structure-based; RMSD).
 
 This script matches the JSON schema produced by
 ``foundation_model/dynamic_set/final/step4.calc_confbench_score_valid_pairs.py``,
-but reads prediction↔reference RMSDs from ProMiSE-bench NuriKit outputs.
+but reads prediction↔reference RMSDs from ProMiSE-bench alignment-batch outputs.
 
 Inputs
 ------
 - ``valid_pairs.json``: expected to be keyed by:
   ``apo-monomers``, ``ligand-induced``, ``protein-induced``.
-- NuriKit results: JSON emitted by ``eval.align.nurikit_align_batch`` (typically
+- Alignment results: JSON emitted by ``eval.align.struct_align_batch`` (typically
   via ``eval.align.split_alignment_jobs``) containing per-task ``rmsd_ca``.
 - reference↔reference metrics: JSON emitted by ``eval.struct.calc_reference_structural_metrics``
   under ``<ref_metrics_dir>/aligned_references/<cluster_id>/**/*_metrics.json``.
@@ -107,13 +107,13 @@ def _load_json(path: Path) -> Any:
         return json.load(f)
 
 
-def _iter_nurikit_rows(nurikit_results: Path) -> Iterable[Dict[str, Any]]:
-    if nurikit_results.is_file():
-        data = _load_json(nurikit_results)
+def _iter_align_rows(align_results: Path) -> Iterable[Dict[str, Any]]:
+    if align_results.is_file():
+        data = _load_json(align_results)
         for row in data:
             yield row
         return
-    for p in sorted(nurikit_results.glob("nurikit_part*.json")):
+    for p in sorted(align_results.glob("align_part*.json")):
         data = _load_json(p)
         for row in data:
             yield row
@@ -121,7 +121,7 @@ def _iter_nurikit_rows(nurikit_results: Path) -> Iterable[Dict[str, Any]]:
 
 def _infer_model_entity_from_row(row: Dict[str, Any]) -> Optional[str]:
     """
-    ProMiSE-bench does not emit model_entity in NuriKit results; recover it from output_cif:
+    ProMiSE-bench does not emit model_entity in alignment results; recover it from output_cif:
       <...>/<model>/<set>/<cluster>/<model_entity>/<file>.cif
     """
     outp = row.get("output_cif")
@@ -131,8 +131,8 @@ def _infer_model_entity_from_row(row: Dict[str, Any]) -> Optional[str]:
     return p.parent.name if p.parent.name else None
 
 
-def _load_prediction_rmsds_from_nurikit(
-    nurikit_results: Path,
+def _load_prediction_rmsds_from_align_results(
+    align_results: Path,
     model: str,
     set_name: str,
     cluster_id: str,
@@ -145,7 +145,7 @@ def _load_prediction_rmsds_from_nurikit(
     """
     target_set = set(target_valid_pair) if target_valid_pair else None
     out: List[Dict[str, Any]] = []
-    for row in _iter_nurikit_rows(nurikit_results):
+    for row in _iter_align_rows(align_results):
         if not row.get("ok"):
             continue
         if str(row.get("prediction_method", "")) != model:
@@ -217,7 +217,7 @@ def _extract_pair_for_set(pair_info: Any) -> Tuple[List[str], Dict[str, Any]]:
 
 
 def process_apo_monomers(
-    nurikit_results: Path,
+    align_results: Path,
     ref_metrics_dir: Path,
     pair_info: Dict,
     cluster_id: str,
@@ -256,8 +256,8 @@ def process_apo_monomers(
             "n_predictions": 0,
         }
 
-        pred_data = _load_prediction_rmsds_from_nurikit(
-            nurikit_results,
+        pred_data = _load_prediction_rmsds_from_align_results(
+            align_results,
             model=model,
             set_name=set_name,
             cluster_id=cluster_id,
@@ -327,7 +327,7 @@ def process_apo_monomers(
 
 def _process_induced_set(
     set_type: str,
-    nurikit_results: Path,
+    align_results: Path,
     ref_metrics_dir: Path,
     pair_info: Dict,
     cluster_id: str,
@@ -452,8 +452,8 @@ def _process_induced_set(
             },
         }
 
-        pred_data_apo = _load_prediction_rmsds_from_nurikit(
-            nurikit_results,
+        pred_data_apo = _load_prediction_rmsds_from_align_results(
+            align_results,
             model=model,
             set_name=set_type,
             cluster_id=cluster_id,
@@ -467,8 +467,8 @@ def _process_induced_set(
         model_result["apo_predictions"]["mean_confbench_score"] = m_s
         model_result["apo_predictions"]["n_predictions"] = n
 
-        pred_data_holo = _load_prediction_rmsds_from_nurikit(
-            nurikit_results,
+        pred_data_holo = _load_prediction_rmsds_from_align_results(
+            align_results,
             model=model,
             set_name=set_type,
             cluster_id=cluster_id,
@@ -565,10 +565,10 @@ def main() -> None:
         help="valid_pairs.json (default: eval.files.valid_pairs)",
     )
     p.add_argument(
-        "--nurikit-results",
+        "--align-results",
         type=Path,
         required=True,
-        help="Directory containing nurikit_part*.json (or a single json file)",
+        help="Directory containing align_part*.json (or a single json file)",
     )
     p.add_argument(
         "--ref-metrics-dir",
@@ -619,7 +619,7 @@ def main() -> None:
             pair, info = _extract_pair_for_set(pair_info)
             if len(pair) != 2:
                 continue
-            res = process_apo_monomers(args.nurikit_results, args.ref_metrics_dir, info, str(cluster_id), models)
+            res = process_apo_monomers(args.align_results, args.ref_metrics_dir, info, str(cluster_id), models)
             pair_key = f"{cluster_id}_{pair[0]}_{pair[1]}"
             all_results["apo-monomers"][pair_key] = res
 
@@ -631,7 +631,7 @@ def main() -> None:
                 pair, info = _extract_pair_for_set(pair_info)
                 if len(pair) != 2:
                     continue
-                res = _process_induced_set(set_type, args.nurikit_results, args.ref_metrics_dir, info, str(cluster_id), models)
+                res = _process_induced_set(set_type, args.align_results, args.ref_metrics_dir, info, str(cluster_id), models)
                 pair_key = f"{cluster_id}_{pair[0]}_{pair[1]}"
                 all_results[set_type][pair_key] = res
 

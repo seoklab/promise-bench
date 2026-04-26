@@ -4,7 +4,7 @@ Generate alignment tasks from ``valid_pairs.json`` + enriched seq_cluster map JS
 
 This module **lives under ``eval/align``**: it writes the alignment task JSON that is
 later sharded by ``eval.align.split_alignment_jobs`` and executed by
-``eval.align.nurikit_align_batch``.
+``eval.align.struct_align_batch``.
 
 Inputs
 ------

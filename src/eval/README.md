@@ -36,14 +36,14 @@ Run **after** §1.1 has produced `valid_pairs.json` and the enriched map JSON.
 
 This step is **required** for the alignment pipeline, because `split_alignment_jobs` consumes `alignment_tasks.json`.
 
-### 2.2 `nurikit_align_batch` (execution)
+### 2.2 `struct_align_batch` (execution)
 
 | | |
 |---|-----|
 | **How it is usually run** | Indirectly via `python -m eval.align.split_alignment_jobs` → generated `run_all.sh` / sbatch scripts. |
-| **Direct command** | `python -m eval.align.nurikit_align_batch --json <alignment_tasks_partXXXX.json> --results-json <nurikit_partXXXX.json>` |
+| **Direct command** | `python -m eval.align.struct_align_batch --json <alignment_tasks_partXXXX.json> --results-json <align_partXXXX.json>` |
 | **Inputs** | Sharded `alignment_tasks_part*.json` (each row contains `ref_cif`, `mobile_cif`, `ref_chain`, `mobile_chain`, plus metadata like `cluster_id`, `pair_type`, `valid_pair`). |
-| **Outputs** | `nurikit_part*.json` with per-task results including `rmsd_ca` and `tm_score_ca` (prediction↔reference). Optional aligned CIF writing depends on flags / the generated scripts. |
+| **Outputs** | `align_part*.json` with per-task results including `rmsd_ca` and `tm_score_ca` (prediction↔reference). Optional aligned CIF writing depends on flags / the generated scripts. |
 
 This output is later consumed by **structure-based ConfBench** (`eval.struct.calc_confbench_score_valid_pairs`).
 
@@ -52,7 +52,7 @@ This branch is **independent** of the distogram scripts below: it does **not** n
 **Alignment modules (index)**:
 - `eval/align/generate_alignment_tasks.py`: write `alignment_tasks.json`
 - `eval/align/split_alignment_jobs.py`: shard tasks + emit `run_all.sh` / sbatch
-- `eval/align/nurikit_align_batch.py`: run alignment and write `nurikit_part*.json` (prediction↔reference RMSD/TM-score)
+- `eval/align/struct_align_batch.py`: run alignment and write `align_part*.json` (prediction↔reference RMSD/TM-score)
 
 ---
 
@@ -72,10 +72,10 @@ This writes per-pair `*_metrics.json` under `<reference_metrics>/aligned_referen
 If you want **RMSD-based ConfBench scores** (used by `eval/merge_all.py` as `--confbench-json`),
 run:
 
-- `python -m eval.struct.calc_confbench_score_valid_pairs --nurikit-results <job_batches>/nurikit_results --ref-metrics-dir <reference_metrics>`
+- `python -m eval.struct.calc_confbench_score_valid_pairs --align-results <job_batches>/align_results --ref-metrics-dir <reference_metrics>`
 
 This consumes:
-- NuriKit per-task results (`nurikit_part*.json`) for prediction↔reference RMSDs
+- per-task alignment results (`align_part*.json`) for prediction↔reference RMSDs
 - reference↔reference metrics emitted by `eval.struct.calc_reference_structural_metrics`
 
 ---
@@ -130,7 +130,7 @@ The following job generators are **optional** (useful when you want many small j
 
 - **Alignment**: `python -m eval.align.split_alignment_jobs`
   - **Use when**: `alignment_tasks.json` is large and you want `run_all.sh` / many `sbatch` shards.
-  - **Skip when**: you can run `python -m eval.align.nurikit_align_batch` directly on a single JSON (or you shard manually).
+  - **Skip when**: you can run `python -m eval.align.struct_align_batch` directly on a single JSON (or you shard manually).
 
 - **Distogram**: `python -m eval.distogram.generate_distogram_calc_jobs` and `python -m eval.distogram.generate_distogram_diff_jobs`
   - **Use when**: task count is large and you want many pre-generated `sbatch` scripts (instead of hand-writing array jobs).

@@ -35,10 +35,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy.spatial.distance import cdist
-from nuri.tools import chimera as nuri_mm
+from nuri.tools import chimera as mm_tools
 
 from eval.align.extract_ca_from_cif import extract_ca_info
-from eval.align.nurikit_align_batch import (
+from eval.align.struct_align_batch import (
     _apply_transform_xyz,
     _calc_rmsd,
     _calc_tm_score,
@@ -411,7 +411,7 @@ def calculate_structural_metrics(
                 lddt_score = calc_lddt(templ, q)
                 T = None
             else:
-                mm = nuri_mm.match_maker(q, templ, cutoff, global_ratio, viol_ratio)
+                mm = mm_tools.match_maker(q, templ, cutoff, global_ratio, viol_ratio)
                 T = np.asarray(mm.transform, dtype=np.float64)
                 q_super = _apply_transform_xyz(q, T)
                 ca_rmsd = _calc_rmsd(templ, q_super)
@@ -463,7 +463,7 @@ def calculate_structural_metrics(
                 "ref1_cif": comp.ref1_cif,
                 "ref2_cif": comp.ref2_cif,
                 "aligned_ref2_path": str(aligned_ref2_path),
-                "alignment_backend": "nurikit",
+                "alignment_backend": "nurikit match_maker",
                 "skip_alignment_mode": skip_alignment,
                 "error": result.error,
             }
@@ -585,7 +585,7 @@ def main() -> None:
     p.add_argument(
         "--skip-alignment",
         action="store_true",
-        help="Do not run NuriKit; read ref2 from existing aligned CIF (e.g. prior run)",
+        help="Skip alignment; read ref2 from existing aligned CIF (e.g. prior run)",
     )
     p.add_argument(
         "--skip-existing-alignments",
