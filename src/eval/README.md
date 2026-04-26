@@ -1,8 +1,8 @@
-# Evaluation: distogram pipeline (`eval/distogram`)
+# Evaluation pipeline (`src/eval/`)
 
-Ported from `foundation_model/dynamic_set/final`.
+This directory contains the **evaluation pipeline** (alignment, structure-based scoring, and distogram-based scoring).
 
-`curation.make_pairs` already enriches `seq_cluster_to_answer_map` with distogram patterns, reference CIF paths, MSA paths, and chain metadata. There is **no** separate “prepare distogram analysis” step in this repo.
+`curation.make_pairs` writes **`seq_cluster_to_answer_map.json`** (MSA paths, reference CIFs, `apo_references` / `holo_references`, distogram patterns, chains). For reference Cβ extraction, pass **that file’s path** to `extract_reference_cb --distogram`. The flag label is older than this filename; it still means “the cluster map JSON,” not a separate preprocessing output.
 
 Below: **what runs where**, **inputs → outputs**, and **recommended order**. Paths depend on `config/config.yaml` and CLI flags; see each module’s `--help`.
 
@@ -21,20 +21,20 @@ Some branches can run in parallel on a cluster, but the dependencies below must 
 
    Outputs (you will use these later):
    - `valid_pairs.json`
-   - enriched `seq_cluster_to_answer_map` JSON
+   - `seq_cluster_to_answer_map.json` (enriched map; this is also the `--distogram` input below)
 
 ### Step 2 — Distogram task preparation (required for both §3 and §4)
 
-2. (Optional but common) Materialize per-reference Cβ coordinate JSONs from a distogram-analysis JSON:
+2. (Optional but common) Materialize per-reference Cβ coordinate JSONs from the enriched map (Step 1 output):
 
-   - `python -m eval.distogram.extract_reference_cb --distogram <distogram_analysis.json>`
+   - `python -m eval.distogram.extract_reference_cb --distogram <seq_cluster_to_answer_map.json>`
 
    Output:
-   - augmented distogram JSON (`*_with_cb_paths.json`) that adds `reference_cb_json`
+   - augmented JSON (`seq_cluster_to_answer_map_with_cb_paths.json`, or `<stem>_with_cb_paths.json` if you used another filename) that adds `reference_cb_json`
 
 3. Build the distogram symlink tree and generate `distogram_tasks.json`:
 
-   - `python -m eval.distogram.collect_distograms --json <distogram_analysis_with_cb_paths.json> ...`
+   - `python -m eval.distogram.collect_distograms --json <seq_cluster_to_answer_map_with_cb_paths.json> ...`
 
    Outputs:
    - a `distogram/...` symlink tree under your chosen output dir
@@ -101,7 +101,7 @@ Run **in this order**.
 |---|-----|
 | **Command** | `python -m curation.make_pairs` (see `--help` for `--csv-dir`, `--outdir`, `--examples-dir`, …) |
 | **Typical inputs** | Cluster / dataset tables under your data root, example prediction layouts under `examples_dir`, and other inputs described in `make_pairs`’s docstring and Click options. |
-| **Main outputs** | Enriched **`seq_cluster_to_answer_map`** (JSON) and **`valid_pairs.json`**. The map carries distogram-related fields, MSA paths, reference CIF paths, and chain metadata used later by distogram and alignment prep. |
+| **Main outputs** | **`seq_cluster_to_answer_map.json`** and **`valid_pairs.json`**. The map is the file passed to **`extract_reference_cb --distogram`** and **`collect_distograms --json`** (after optional `_with_cb_paths` augmentation). |
 
 ---
 
@@ -114,7 +114,7 @@ Run **after** §1.1 has produced `valid_pairs.json` and the enriched map JSON.
 | | |
 |---|-----|
 | **Command** | `python -m eval.align.generate_alignment_tasks` (see `--help`) |
-| **Typical inputs** | `valid_pairs.json` + enriched `seq_cluster_to_answer_map` from `curation.make_pairs`. |
+| **Typical inputs** | `valid_pairs.json` + `seq_cluster_to_answer_map.json` from `curation.make_pairs`. |
 | **Main outputs** | `alignment_tasks.json` (task list for structure alignment). |
 
 This step is **required** for the alignment pipeline, because `split_alignment_jobs` consumes `alignment_tasks.json`.
@@ -180,12 +180,12 @@ These modules live under **`eval/distogram`**, not under `curation`.
 `extract_reference_cb` is the step that materializes **per-reference CB coordinate JSON**
 files used by downstream distogram tasks.
 
-#### Mode: from a distogram-analysis JSON
+#### Mode: `--distogram` (enriched cluster map)
 
 | | |
 |---|-----|
-| **Command** | `python -m eval.distogram.extract_reference_cb --distogram distogram_analysis_data_final.json` |
-| **Input** | A distogram-analysis JSON that contains `apo_references` / `holo_references` with `reference_cif_path`. |
+| **Command** | `python -m eval.distogram.extract_reference_cb --distogram path/to/seq_cluster_to_answer_map.json` |
+| **Input** | Same schema as **`seq_cluster_to_answer_map.json`** from `make_pairs` (`apo_references` / `holo_references` with `reference_cif_path`). Legacy filenames like `distogram_analysis_data_final.json` refer to the same shape. |
 | **Output** | Writes per-reference `*_cb.json` under the configured `ref_coords` root, emits `distogram_ref_cb_map.json`, and writes an **augmented** distogram JSON that adds `reference_cb_json` paths. |
 This augmented JSON (the `*_with_cb_paths.json` next to the input) is what you should pass to `collect_distograms --json ...` so that `distogram_tasks.json` includes `reference_cb_json`.
 
@@ -194,7 +194,7 @@ This augmented JSON (the `*_with_cb_paths.json` next to the input) is what you s
 | | |
 |---|-----|
 | **Command** | `python -m eval.distogram.collect_distograms` (`--help`) |
-| **Typical inputs** | Enriched JSON describing where prediction distograms live (see `--json` in `--help`); method filters (`--method` / `--all`); optional AF3 chain-mapping root. |
+| **Typical inputs** | **`seq_cluster_to_answer_map.json`** or its **`_with_cb_paths`** variant from `extract_reference_cb` (see `--json` in `--help`); method filters (`--method` / `--all`); optional AF3 chain-mapping root. |
 | **Main outputs** | **`distogram/…`** symlink tree under your chosen output dir; optionally **`distogram_tasks.json`** (via task-generation flags). |
 
 ### 4.4 `calc_distogram_loss` → `calc_reference_distogram_diff` → `calc_distogram_confbench`
@@ -248,7 +248,7 @@ If CLI paths are omitted, defaults come from `config/config.yaml` (`eval` sectio
 
 | Module | Role |
 |--------|------|
-| `eval/distogram/extract_reference_cb` | Reference Cβ extraction from a distogram-analysis JSON (adds `reference_cb_json` paths for downstream tasks) |
+| `eval/distogram/extract_reference_cb` | Reference Cβ extraction from **`seq_cluster_to_answer_map.json`** via `--distogram` (adds `reference_cb_json` for downstream tasks) |
 | `eval/distogram/collect_distograms` | Symlink distograms into a tree; emit `distogram_tasks.json` |
 | `eval/distogram/calc_distogram_loss` | Prediction vs reference distogram loss |
 | `eval/distogram/calc_reference_distogram_diff` | Pairwise reference distogram differences |
