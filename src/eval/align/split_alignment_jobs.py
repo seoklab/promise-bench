@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Split alignment_tasks.json into shards; emit local run_all.sh and/or SLURM sbatch scripts.
 
-Runs ``python -m eval.align.nurikit_align_batch`` per shard.
+Input JSON is produced by ``python -m eval.align.generate_alignment_tasks``.
+Each shard runs ``python -m eval.align.nurikit_align_batch``.
 
 ``--emit local`` runs shards sequentially on this host; ``--emit sbatch`` emits SLURM
 only; ``--emit both`` (default) generates both.
@@ -144,9 +145,12 @@ def split_and_generate_jobs(
 
 
 def main() -> None:
-    default_input = E.dir("align") / "alignment_tasks.json"
-    default_out = E.dir("align") / "job_batches"
-    default_log = E.dir("align") / "logs"
+    # Keep defaults independent of an ``eval.dirs.align`` config key.
+    # Put alignment artefacts under eval.dirs.output/align/ by convention.
+    align_root = E.dir("output") / "align"
+    default_input = align_root / "alignment_tasks.json"
+    default_out = align_root / "job_batches"
+    default_log = align_root / "logs"
 
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
@@ -154,7 +158,7 @@ def main() -> None:
         "-i",
         type=str,
         default=str(default_input),
-        help="alignment_tasks.json from curation.generate_alignment_tasks",
+        help="alignment_tasks.json from eval.align.generate_alignment_tasks",
     )
     p.add_argument(
         "--parts",
