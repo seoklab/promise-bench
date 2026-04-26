@@ -23,6 +23,8 @@ dependencies = [
     "parasail",
     "nurikit",
     "pyyaml",
+    "torch",
+    "psutil",
 ]
 
 [project.scripts]
@@ -32,3 +34,6 @@ promise_data = "curation.run:promise_data"
 where = ["src"]
 namespaces = true
 exclude = ["*.egg-info", "*_egg_info*"]
+
+[tool.setuptools.package-data]
+"eval" = ["README.md"]
