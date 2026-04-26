@@ -5,18 +5,25 @@ make_pairs.py - Generate seq_cluster_to_answer_map.json and valid_pairs.json
 Usage:
     python -m curation.make_pairs
     python -m curation.make_pairs --csv-dir data/dataset --outdir data/dataset --examples-dir examples
+
+Next: alignment tasks — ``python -m eval.align.generate_alignment_tasks --help``.
+Distogram eval consumes this same enriched map (optionally after
+``python -m eval.distogram.extract_reference_cb --distogram …`` for ``reference_cb_json``).
 """
 
 import json
 import csv
+import string
 import re
 from glob import glob
 from pathlib import Path
 from collections import defaultdict
 from itertools import combinations
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Any, Dict, List, Set, Tuple, Optional
 
 import click
+
+from utils._config import pipeline_cfg
 
 
 # ============================================================================
@@ -109,11 +116,6 @@ def load_csv(csv_path: Path) -> List[dict]:
         return []
     with open(csv_path) as f:
         return list(csv.DictReader(f))
-
-
-def get_csv_field(row: dict, old_name: str, new_name: str) -> str:
-    """Get field value, supporting both old and new CSV formats."""
-    return row.get(old_name) or row.get(new_name, "")
 
 
 def get_cluster_name(row: dict) -> str:
@@ -293,6 +295,479 @@ def generate_valid_pairs(data: Dict[str, Dict], csv_pairs: Dict[str, Set]) -> Di
     return result
 
 
+
+# ============================================================================
+# Distogram enrichment (config: pipeline.distogram_enrich in config/config.yaml)
+# ============================================================================
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _enrich_cfg() -> Dict:
+    return pipeline_cfg.raw().get("distogram_enrich") or {}
+
+
+def _resolve_path(val: object) -> Path | None:
+    if not val or not isinstance(val, str):
+        return None
+    p = Path(val)
+    return p if p.is_absolute() else _REPO_ROOT / p
+
+
+def _map_cfg_path(s: str | None) -> str:
+    p = _resolve_path(s)
+    return str(p) if p is not None else ""
+
+
+def _method_to_disto_key(method: str) -> str:
+    return {
+        "af3": "af3",
+        "boltz-2": "boltz2",
+        "boltz2": "boltz2",
+        "boltz-1": "boltz1",
+        "boltz1": "boltz1",
+        "bioemu": "bioemu",
+    }.get(method, method)
+
+
+class DistogramPatternError(Exception):
+    """Raised when distogram pattern is missing or matches no files."""
+
+    pass
+
+
+def get_chain_match_from_fasta(fasta_file: Path) -> Dict[str, str]:
+    """
+    Get chain ID mapping from FASTA file for chai method.
+    Maps original chain ID to alphabet chain ID (A, B, C, ...).
+    """
+    chain_match = {}
+    if not fasta_file.exists():
+        return chain_match
+
+    with open(fasta_file) as f:
+        chain_ids = list(string.ascii_uppercase)
+        idx = -1
+        for line in f.readlines():
+            if line.startswith(">"):
+                idx += 1
+                if idx < len(chain_ids):
+                    chain_id = line.strip().split("=")[-1]
+                    chain_match[chain_id] = chain_ids[idx]
+    return chain_match
+
+
+def _fallback_chain_letter(id_str: str) -> str:
+    s = (id_str or "").strip()
+    if not s:
+        return ""
+    return s[0] if s[0].isalpha() else s
+
+
+def get_target_chain_for_method(
+    method: str,
+    yaml_tag: str,
+    path_segment: str,
+    cluster_id: str,
+    map_set_name: str,
+) -> str:
+    """
+    Get target chain ID for different prediction methods.
+    ``path_segment`` comes from the prediction glob (set folder in the path);
+    ``map_set_name`` is the answer-map set key (``intrinsic``, etc.) for chain JSON lookup.
+    """
+    de = _enrich_cfg()
+    segment = (path_segment or "").strip() or "intrinsic"
+    mkey = {
+        "boltz-2": "boltz2",
+        "boltz-1": "boltz1",
+        "chai-1": "chai",
+    }.get(method, method)
+    if mkey == "af3":
+        interested_chain = extract_chain_from_yaml_tag(yaml_tag)
+        p = _map_cfg_path(de.get("af3_chain_mappings"))
+        if p:
+            m = get_chain_mapping(cluster_id, yaml_tag, map_set_name, p)
+            if m is not None and interested_chain in m:
+                return m[interested_chain]
+        return _fallback_chain_letter(interested_chain)
+
+    if mkey == "boltz2":
+        interested_chain = extract_chain_from_yaml_tag(yaml_tag)
+        p = _map_cfg_path(de.get("boltz_chain_mappings"))
+        if p:
+            m = get_chain_mapping(cluster_id, yaml_tag, map_set_name, p)
+            if m is not None and interested_chain in m:
+                return m[interested_chain]
+        return _fallback_chain_letter(interested_chain)
+
+    if mkey == "boltz1":
+        return extract_chain_from_yaml_tag(yaml_tag)
+
+    if mkey == "chai":
+        interested_chain_id = extract_chain_from_yaml_tag(yaml_tag)
+        if segment == "ligand-induced":
+            return "A"
+        if segment == "intrinsic":
+            return "A"
+        root = _resolve_path(de.get("chai_fasta_root"))
+        if root is not None:
+            fasta_path = root / segment / cluster_id / f"{yaml_tag}.fa"
+            if fasta_path.exists():
+                chain_match = get_chain_match_from_fasta(fasta_path)
+                if interested_chain_id in chain_match:
+                    return chain_match[interested_chain_id]
+        return _fallback_chain_letter(interested_chain_id)
+
+    if mkey == "bioemu":
+        return "A"
+
+    return extract_chain_from_yaml_tag(yaml_tag)
+
+
+def extract_chain_from_yaml_tag(yaml_tag: str) -> str:
+    """
+    Extract chain ID from yaml tag.
+    e.g., '2wrz_2_B1_m' -> 'B1'
+    """
+    parts = yaml_tag.split("_")
+    if len(parts) >= 3:
+        return parts[2]  # B1
+    return ""
+
+
+def get_chain_mapping(
+    cluster_id: str, yaml_tag: str, method_type: str, mapping_json_path: str
+) -> Optional[Dict]:
+    """
+    Get modeled→target chain mapping from a JSON file (AF3 or Boltz layout).
+    Key shape: ``"{set_name}/{cluster_id}/{yaml_tag}"`` (same as the map set key).
+    """
+    if not mapping_json_path:
+        return None
+    mapping_path = Path(mapping_json_path)
+    if not mapping_path.exists():
+        return None
+    key = f"{(method_type or '').strip()}/{cluster_id}/{yaml_tag}"
+    with open(mapping_path, "r") as f:
+        all_mappings = json.load(f)
+    if key not in all_mappings:
+        return None
+    modeled = all_mappings[key]["mapping"]
+    return {v: k for k, v in modeled.items()}
+
+
+def get_msa_path(cluster_id: str) -> str:
+    """
+    MSA file path: ``<data_root>/msas/<2-letter>/{cluster_id}.a3m`` (``pipeline.dirs.msas``).
+    """
+    try:
+        two_letter = cluster_id.split("_")[0][1:3]
+        msa_path = pipeline_cfg.dir("msas") / two_letter / f"{cluster_id}.a3m"
+    except Exception:
+        return ""
+    if msa_path.exists():
+        return str(msa_path)
+    print(f"Warning: MSA file not found for {cluster_id}")
+    return ""
+
+
+def get_reference_cif_path(yaml_tag: str) -> str:
+    """
+    Get reference CIF file path for a yaml tag under ``pipeline.dirs.cif_asms``.
+    """
+    parts = yaml_tag.split("_")
+    if len(parts) < 3:
+        return ""
+
+    pdb_id = parts[0].upper()
+    asm_num = parts[1]
+    first_two = pdb_id[1:3]
+    rel = Path(first_two) / pdb_id / f"asm_{pdb_id.lower()}_{asm_num}.cif"
+
+    try:
+        cif_path = pipeline_cfg.dir("cif_asms") / rel
+        if cif_path.exists():
+            return str(cif_path)
+    except Exception:
+        pass
+
+    print(f"Warning: Reference CIF file not found for yaml_tag {yaml_tag}")
+    return ""
+
+
+def extract_yaml_tag_from_pattern(pattern: str) -> str:
+    """
+    Extract yaml_tag from a prediction pattern.
+    e.g., ``.../af3/.../intrinsic/8ABP_1/2wrz_2_B1_m/seed_...`` -> ``2wrz_2_B1_m``
+    """
+
+    # Look for pattern like /cluster_id/yaml_tag/
+    match = re.search(r"/[^/]+/([^/]+)/seed_", pattern)
+    if match:
+        return match.group(1)
+    return ""
+
+
+def extract_method_type_from_pattern(pattern: str) -> str:
+    """Extract set segment from a prediction path: intrinsic, ligand-induced, or protein-induced."""
+    match = re.search(
+        r"/(intrinsic|ligand-induced|protein-induced)/[^/]+/", pattern
+    )
+    if match:
+        return match.group(1)
+    return ""
+
+
+def get_distogram_path_pattern(
+    method: str, method_type: str, cluster_id: str, yaml_tag: str
+) -> str:
+    """
+    Resolve a distogram glob that exists on disk. Template list comes from
+    ``config.pipeline.distogram_enrich.distogram`` (keys: af3, boltz1, boltz2, bioemu).
+    Placeholders: {method_type} (intrinsic|ligand-induced|protein-induced), {cluster_id}, {yaml_tag}.
+    """
+    key = _method_to_disto_key(method)
+    if key not in ("af3", "boltz1", "boltz2", "bioemu"):
+        return ""
+    de = _enrich_cfg()
+    disto = de.get("distogram") or {}
+    raw = disto.get(key) or disto.get(method)
+    if raw is None or raw == []:
+        return ""
+    templates = [raw] if isinstance(raw, str) else list(raw)
+    mt = (method_type or "").strip() or "intrinsic"
+    for tmpl in templates:
+        s = str(tmpl).format(
+            method_type=mt, cluster_id=cluster_id, yaml_tag=yaml_tag
+        )
+        if s and glob(s):
+            return s
+    return ""
+
+
+def enhance_cluster_data(
+    cluster_id: str,
+    cluster_data: Dict,
+    set_name: str,
+    representative_sequences: Dict,
+) -> Dict:
+    """
+    Enhance cluster data with additional information needed for distogram analysis.
+    Maintains the original structure while adding analysis metadata.
+    """
+    # Create a deep copy to avoid modifying original
+    enhanced_data = json.loads(json.dumps(cluster_data))
+    de = _enrich_cfg()
+    af3_chain_json = _map_cfg_path(de.get("af3_chain_mappings"))
+    boltz_chain_json = _map_cfg_path(de.get("boltz_chain_mappings"))
+
+    # Add MSA path at cluster level
+    enhanced_data["msa_path"] = get_msa_path(cluster_id)
+
+    # Add representative sequence if available
+    if cluster_id in representative_sequences:
+        enhanced_data["representative_sequence_id"] = representative_sequences[
+            cluster_id
+        ].get("header", "")
+
+    # Enhance apo tags with reference information
+    if "apo_tags" in enhanced_data:
+        apo_refs = {}
+        for tag in enhanced_data["apo_tags"]:
+            apo_refs[tag] = {
+                "reference_cif_path": get_reference_cif_path(tag),
+                "target_chain": extract_chain_from_yaml_tag(tag),
+            }
+        enhanced_data["apo_references"] = apo_refs
+
+    # Enhance holo tags with reference information
+    if "holo_tags" in enhanced_data:
+        holo_refs = {}
+        for tag in enhanced_data["holo_tags"]:
+            holo_refs[tag] = {
+                "reference_cif_path": get_reference_cif_path(tag),
+                "target_chain": extract_chain_from_yaml_tag(tag),
+            }
+        enhanced_data["holo_references"] = holo_refs
+
+    # Enhance predictions with target chain and distogram path information
+    # Handle apo_predictions (method -> info structure)
+    if "apo_predictions" in enhanced_data:
+        for method, method_info in enhanced_data["apo_predictions"].items():
+            # Create enhanced method info by copying original
+            enhanced_method_info = json.loads(json.dumps(method_info))
+
+            # Add target chain based on method
+            if method == "bioemu":
+                # BioEmu always uses chain A
+                enhanced_method_info["target_chain"] = "A"
+
+                pattern = get_distogram_path_pattern(
+                    method, set_name, cluster_id, yaml_tag=""
+                )
+                if not pattern:
+                    raise DistogramPatternError(
+                        f"Distogram pattern not defined for method '{method}' cluster '{cluster_id}'"
+                    )
+                enhanced_method_info["distogram_pattern"] = pattern
+            else:
+                # For other methods, try to extract yaml_tag from pattern
+                pattern = method_info.get("pattern", "")
+                yaml_tag = extract_yaml_tag_from_pattern(pattern)
+                pred_set = extract_method_type_from_pattern(pattern) or set_name
+
+                if yaml_tag:
+                    enhanced_method_info["yaml_tag"] = yaml_tag
+                    enhanced_method_info["reference_cif_path"] = get_reference_cif_path(
+                        yaml_tag
+                    )
+
+                    target_chain = get_target_chain_for_method(
+                        method, yaml_tag, pred_set, cluster_id, set_name
+                    )
+                    enhanced_method_info["target_chain"] = target_chain
+
+                    # Add distogram pattern for methods that support it
+                    if method in ("af3", "boltz-1", "boltz-2"):
+                        pattern = get_distogram_path_pattern(
+                            method, pred_set, cluster_id, yaml_tag
+                        )
+
+                        if not pattern:
+                            raise DistogramPatternError(
+                                f"Distogram pattern not defined for method '{method}' cluster '{cluster_id}' yaml_tag '{yaml_tag}'"
+                            )
+
+                        enhanced_method_info["distogram_pattern"] = pattern
+
+                        # Add AF3 / Boltz chain mapping if available
+                        if method == "af3" and af3_chain_json:
+                            af3_mapping = get_chain_mapping(
+                                cluster_id,
+                                yaml_tag,
+                                set_name,
+                                af3_chain_json,
+                            )
+                            if af3_mapping:
+                                enhanced_method_info["chain_mapping"] = af3_mapping
+
+                        elif method == "boltz-2" and boltz_chain_json:
+                            boltz_mapping = get_chain_mapping(
+                                cluster_id,
+                                yaml_tag,
+                                set_name,
+                                boltz_chain_json,
+                            )
+                            if boltz_mapping:
+                                enhanced_method_info["chain_mapping"] = boltz_mapping
+                else:
+                    # If yaml_tag extraction fails, add a default target_chain
+                    print(
+                        f"Warning: Could not extract yaml_tag from pattern for {method} in apo_predictions: {pattern}"
+                    )
+                    enhanced_method_info["target_chain"] = "A"  # fallback
+
+            enhanced_data["apo_predictions"][method] = enhanced_method_info
+
+    # Handle holo_predictions (conformation -> method -> info structure)
+    if "holo_predictions" in enhanced_data:
+        for conformation, conformation_data in enhanced_data[
+            "holo_predictions"
+        ].items():
+            enhanced_conformation_data = {}
+
+            for method, method_info in conformation_data.items():
+                # Create enhanced method info by copying original
+                enhanced_method_info = json.loads(json.dumps(method_info))
+
+                # Add target chain based on method
+                if method == "bioemu":
+                    # BioEmu always uses chain A
+                    enhanced_method_info["target_chain"] = "A"
+                else:
+                    # For other methods, try to extract yaml_tag from pattern
+                    pattern = method_info.get("pattern", "")
+                    yaml_tag = extract_yaml_tag_from_pattern(pattern)
+                    path_method_type = (
+                        extract_method_type_from_pattern(pattern) or set_name
+                    )
+
+                    if yaml_tag:
+                        enhanced_method_info["yaml_tag"] = yaml_tag
+                        enhanced_method_info["reference_cif_path"] = (
+                            get_reference_cif_path(yaml_tag)
+                        )
+
+                        target_chain = get_target_chain_for_method(
+                            method, yaml_tag, path_method_type, cluster_id, set_name
+                        )
+                        enhanced_method_info["target_chain"] = target_chain
+
+                        # Add distogram pattern for methods that support it
+                        if method in ("af3", "boltz-1", "boltz-2"):
+                            pattern = get_distogram_path_pattern(
+                                method, path_method_type, cluster_id, yaml_tag
+                            )
+
+                            if not pattern:
+                                raise DistogramPatternError(
+                                    f"Distogram pattern not defined for method '{method}' cluster '{cluster_id}' yaml_tag '{yaml_tag}'"
+                                )
+
+                            enhanced_method_info["distogram_pattern"] = pattern
+
+                            if method == "af3" and af3_chain_json:
+                                af3_mapping = get_chain_mapping(
+                                    cluster_id,
+                                    yaml_tag,
+                                    set_name,
+                                    af3_chain_json,
+                                )
+                                if af3_mapping:
+                                    enhanced_method_info["chain_mapping"] = af3_mapping
+                            elif method == "boltz-2" and boltz_chain_json:
+                                boltz_mapping = get_chain_mapping(
+                                    cluster_id,
+                                    yaml_tag,
+                                    set_name,
+                                    boltz_chain_json,
+                                )
+                                if boltz_mapping:
+                                    enhanced_method_info["chain_mapping"] = (
+                                        boltz_mapping
+                                    )
+                    else:
+                        # If yaml_tag extraction fails, add a default target_chain
+                        print(
+                            f"Warning: Could not extract yaml_tag from pattern for {method} in holo_predictions/{conformation}: {pattern}"
+                        )
+                        enhanced_method_info["target_chain"] = "A"  # fallback
+
+                enhanced_conformation_data[method] = enhanced_method_info
+
+            enhanced_data["holo_predictions"][conformation] = enhanced_conformation_data
+
+    return enhanced_data
+
+
+def enrich_seq_cluster_map(
+    seq_cluster_data: Dict[str, Any],
+    representative_sequences: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Enrich every cluster in a seq_cluster_to_answer_map (e.g. from make_pairs).
+    The dynamics set is keyed ``intrinsic`` in the map and in
+    ``distogram_enrich`` path templates.
+    """
+    enhanced_data: Dict[str, Any] = {}
+    for set_name, clusters in seq_cluster_data.items():
+        enhanced_data[set_name] = {}
+        for cluster_id, cluster_data in clusters.items():
+            enhanced_data[set_name][cluster_id] = enhance_cluster_data(
+                cluster_id, cluster_data, set_name, representative_sequences
+            )
+    return enhanced_data
+
 # ============================================================================
 # Main CLI
 # ============================================================================
@@ -351,7 +826,18 @@ def main(csv_dir, clusters_json, examples_dir, outdir):
     else:
         click.echo("  [SKIP] examples directory not found")
         data = add_predictions_to_data(data, None)
-    
+
+    rep_path = pipeline_cfg.file("rep_seq")
+    if rep_path is None or not rep_path.exists():
+        raise click.ClickException(
+            "Enrichment requires pipeline.files.rep_seq in config to point to an existing JSON file."
+        )
+    click.echo("\n[4b] Enriching seq_cluster_to_answer_map (MSA, CIF, distogram, chains)...")
+    with open(rep_path) as fh:
+        rep_data = json.load(fh)
+    data = enrich_seq_cluster_map(data, rep_data)
+    click.echo("  Enrichment done.")
+
     # 5. Generate valid pairs
     click.echo("\n[5] Generating valid pairs...")
     csv_pairs = {

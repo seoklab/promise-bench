@@ -60,7 +60,18 @@ pipeline:
     rep_seq: rep_seq.json
     answer_map: dataset/seq_cluster_to_answer_map.json
     ligand_clusters: /home.galaxy4/seeun/works/projects/casp-pipe/data/cluster-lig_ccd/cutoff_0.4.json
-
+  # make_pairs enrichment: MSA/chain/distogram paths. Use absolute paths
+  # or paths relative to the repo root. Set lists to try glob patterns in order
+  # ({method_type}, {cluster_id}, {yaml_tag} are substituted; intrinsic = dynamics).
+  distogram_enrich:
+    af3_chain_mappings: null
+    boltz_chain_mappings: null
+    chai_fasta_root: null
+    distogram:
+      boltz2: []
+      boltz1: []
+      af3: []
+      bioemu: []
 # =====================================================================
 # Evaluation
 # =====================================================================
@@ -80,8 +91,10 @@ eval:
     renumbered_pdbs: msa/renumbered_pdbs
     esm_contacts: msa/esm_contacts
 
-    # distogram
+    # distogram (typical layout; all paths are passed explicitly to CLI tools)
     distogram: distogram
+    ref_coords: distogram/ref_coords
+    ref_distogram: distogram/ref_distogram
 
     # output
     output: output
@@ -113,9 +126,18 @@ eval:
     training_bias_chai1: train/training_bias/training_bias_per_pair_chai_1.json
     training_bias_bioemu: train/training_bias/training_bias_per_pair_bioemu.json
 
+    # distogram pipeline (optional; null = use dirs / pipeline fallbacks in code)
+    distogram_tasks: null
+
   # External paths (machine-specific, override as needed)
   external:
     meta_data_dir: null       # e.g. /home.galaxy4/seeun/DB/RCSB/meta_data
     combinations_dir: null    # e.g. data/combinations-final
     foldseek_hits_dir: null   # e.g. /path/to/foldseek/out
     mmseqs_hits_dir: null     # e.g. /path/to/mmseqs/out
+
+    # Defaults for eval.distogram CLIs when flags are omitted (MSA / rep_seq use pipeline dirs/files)
+    ref_coords_dir: null      # null → eval.data_root/ref_coords (eval.dirs.ref_coords)
+    ref_distogram_dir: null   # null → eval.data_root/ref_distogram
+    af3_chain_mapping_root: null   # parent of AF3/{method_type}/{cluster}/… (collect_distograms)
+    aligned_cif_dir: null     # extract_reference_cb --symlink --base-dir
