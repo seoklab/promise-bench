@@ -25,7 +25,7 @@ def read_cif_doc(cif_path: Path) -> gemmi.cif.Document:
         with gzip.open(cif_path, "rt", encoding="utf-8") as f:
             content = f.read()
         return gemmi.cif.read_string(content)
-    return gemmi.cif.read_file(str(cif_path))
+    return gemmi.cif.read_file(cif_path.as_posix())
 
 
 def entity_poly_to_dict(block: gemmi.cif.Block) -> Dict[str, Dict[str, str]]:
@@ -51,7 +51,7 @@ def read_cif_structure(cif_path: Path) -> gemmi.Structure:
             content = f.read()
         doc = gemmi.cif.read_string(content)
         return gemmi.make_structure_from_block(doc[0])
-    return gemmi.read_structure(str(cif_path))
+    return gemmi.read_structure(cif_path.as_posix())
 
 
 def extract_ca_idx_map(
@@ -99,7 +99,7 @@ def extract_ca_info(
         if error_list is not None:
             error_list.append(
                 {
-                    "cif_path": str(cif_path),
+                    "cif_path": cif_path,
                     "chain_id": chain_id,
                     "error_type": error_type,
                     "message": message,

@@ -21,7 +21,7 @@ from utils._config import eval_cfg as E
 
 
 def split_and_generate_jobs(
-    input_json: str,
+    input_json: Path,
     num_parts: int,
     output_dir: Path,
     emit: str,
@@ -34,11 +34,11 @@ def split_and_generate_jobs(
     log_dir: Path,
     write_cif: bool,
 ) -> None:
-    input_json = str(Path(input_json).resolve())
+    input_json = input_json.resolve()
     log_dir = log_dir.resolve()
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(input_json, "r") as f:
+    with open(input_json) as f:
         tasks = json.load(f)
 
     total_tasks = len(tasks)
@@ -91,7 +91,7 @@ def split_and_generate_jobs(
         rp = (results_dir / f"align_part{part_num}.json").resolve()
         return (
             f"{python_exe} -m eval.align.struct_align_batch "
-            f"--json {jp} --results-json {rp}{wc}\n"
+            f"--json {jp.as_posix()} --results-json {rp.as_posix()}{wc}\n"
         )
 
     def one_sbatch_inner(jp: Path, part_idx: int) -> str:
@@ -112,7 +112,6 @@ def split_and_generate_jobs(
     if emit in ("sbatch", "both"):
         sbatch_list: List[Path] = []
         for i, json_path in enumerate(json_files):
-            jp = str(json_path)
             part_num = str(i + 1).zfill(4)
             sbatch_path = sbatch_dir / f"align_part{part_num}.sh"
 
@@ -137,7 +136,7 @@ def split_and_generate_jobs(
             f.write("#!/bin/bash\n")
             f.write(f"# Submit {len(sbatch_list)} SLURM jobs\n\n")
             for sp in sbatch_list:
-                f.write(f"sbatch {sp}\n")
+                f.write(f"sbatch {sp.as_posix()}\n")
 
         submit_all_path.chmod(0o755)
         print(f"SLURM scripts: {sbatch_dir} ({len(sbatch_list)} jobs)")
@@ -156,8 +155,8 @@ def main() -> None:
     p.add_argument(
         "--input",
         "-i",
-        type=str,
-        default=str(default_input),
+        type=Path,
+        default=default_input,
         help="alignment_tasks.json from eval.align.generate_alignment_tasks",
     )
     p.add_argument(

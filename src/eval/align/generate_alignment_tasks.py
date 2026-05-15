@@ -29,6 +29,12 @@ from typing import Any, Dict, List, Optional
 from utils._config import eval_cfg as E, pipeline_cfg as C
 
 
+def _path_json_default(obj: object) -> str:
+    if isinstance(obj, Path):
+        return obj.as_posix()
+    raise TypeError(f"Not JSON serializable: {type(obj)!r}")
+
+
 def find_conf_label(yaml_tag: str, cluster_data: Dict) -> str:
     base_tag = yaml_tag
     if base_tag.endswith("_m"):
@@ -120,18 +126,18 @@ def extract_file_info(file_path: Path, method: str, yaml_tag: str) -> Dict[str, 
 
 
 def generate_alignment_tasks(
-    valid_pairs_file: str,
-    distogram_data_file: str,
-    output_json: str,
-    output_dir: str,
-    cif_dir: str,
+    valid_pairs_file: Path,
+    distogram_data_file: Path,
+    output_json: Path,
+    output_dir: Path,
+    cif_dir: Path,
 ) -> List[Dict]:
     with open(valid_pairs_file) as f:
         valid_pairs = json.load(f)
     with open(distogram_data_file) as f:
         distogram_data = json.load(f)
 
-    cif_root = Path(cif_dir)
+    cif_root = cif_dir
     alignment_tasks: List[Dict] = []
     error_list: List[Dict] = []
 
@@ -217,6 +223,7 @@ def generate_alignment_tasks(
                     prediction_dict = prediction_dict_by_reference.get(reference, {})
 
                     if not find_reference_cif(reference, cif_root):
+                        print(reference, cif_root)
                         error_list.append(
                             {
                                 "pair_type": pair_type,
@@ -319,9 +326,9 @@ def generate_alignment_tasks(
 
                                 alignment_tasks.append(
                                     {
-                                        "ref_cif": str(mobile_cif.resolve()),
-                                        "mobile_cif": str(pred_path.resolve()),
-                                        "output_cif": str(output_path.resolve()),
+                                        "ref_cif": mobile_cif.resolve(),
+                                        "mobile_cif": pred_path.resolve(),
+                                        "output_cif": output_path.resolve(),
                                         "ref_chain": mobile_ref_chain,
                                         "mobile_chain": mobile_chain,
                                         "target_conformation": target_conformation,
@@ -341,7 +348,7 @@ def generate_alignment_tasks(
     out_path = Path(output_json)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
-        json.dump(alignment_tasks, f, indent=2)
+        json.dump(alignment_tasks, f, indent=2, default=_path_json_default)
     print(f"\nGenerated {len(alignment_tasks)} tasks -> {out_path}")
 
     if error_list:
@@ -355,11 +362,24 @@ def generate_alignment_tasks(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--valid-pairs", default=str(E.file("valid_pairs")))
-    p.add_argument("--distogram-data", default=str(C.file("answer_map") or Path("seq_cluster_to_answer_map.json")))
-    p.add_argument("--output", "-o", default=str((E.dir("output") / "alignment_tasks.json").resolve()))
-    p.add_argument("--output-dir", default=str((E.dir("output") / "aligned_cif").resolve()))
-    p.add_argument("--cif-dir", default=str(C.dir("cif_asms")))
+    p.add_argument("--valid-pairs", type=Path, default=E.file("valid_pairs"))
+    p.add_argument(
+        "--distogram-data",
+        type=Path,
+        default=C.file("answer_map") or Path("seq_cluster_to_answer_map.json"),
+    )
+    p.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=(E.dir("output") / "alignment_tasks.json").resolve(),
+    )
+    p.add_argument(
+        "--output-dir",
+        type=Path,
+        default=(E.dir("output") / "aligned_cif").resolve(),
+    )
+    p.add_argument("--cif-dir", type=Path, default=C.dir("cif_asms"))
     args = p.parse_args()
     generate_alignment_tasks(
         valid_pairs_file=args.valid_pairs,
