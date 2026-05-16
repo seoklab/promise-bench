@@ -8,9 +8,10 @@ later sharded by ``eval.align.split_alignment_jobs`` and executed by
 
 Inputs
 ------
-- ``valid_pairs.json``: produced by ``python -m curation.make_pairs``.
-- enriched seq_cluster map JSON (a.k.a. ``seq_cluster_to_answer_map``): also produced by
-  ``python -m curation.make_pairs``.
+- ``valid_pairs.json``: produced by ``python -m curation.make_pairs`` (list pairs
+  ``[tag1, tag2]`` per cluster, or optional enriched dicts with ``valid_pair``).
+- enriched seq_cluster map JSON (a.k.a. ``seq_cluster_to_answer_map``): prediction
+  glob patterns, chains, holo_predictions layout; also from ``make_pairs``.
 
 Usage
 -----
@@ -27,6 +28,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils._config import eval_cfg as E, pipeline_cfg as C
+
+_INTRINSIC_SET = "intrinsic"
 
 
 def _path_json_default(obj: object) -> str:
@@ -125,6 +128,94 @@ def extract_file_info(file_path: Path, method: str, yaml_tag: str) -> Dict[str, 
     }
 
 
+def _infer_model_entity(cluster_data: Dict[str, Any], valid_pair: List[str]) -> Optional[str]:
+    """Pick prediction yaml tag for intrinsic pairs (from map, else first valid_pair tag)."""
+    tags_in_preds: List[str] = []
+    for method_info in cluster_data.get("apo_predictions", {}).values():
+        if isinstance(method_info, dict):
+            yt = method_info.get("yaml_tag")
+            if yt:
+                tags_in_preds.append(str(yt))
+    for tag in valid_pair:
+        if tag in tags_in_preds:
+            return tag
+    if tags_in_preds:
+        return tags_in_preds[0]
+    return valid_pair[0] if valid_pair else None
+
+
+def _normalize_pair_info(
+    pair_info: Any,
+    pair_type: str,
+    cluster_data: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """
+  Accept make_pairs list pairs ``[tag1, tag2]`` or enriched dicts.
+
+  Returns dict with ``valid_pair`` and entity fields, or *None* if invalid.
+  """
+    if isinstance(pair_info, dict):
+        valid_pair = pair_info.get("valid_pair")
+        if not valid_pair or not isinstance(valid_pair, (list, tuple)) or len(valid_pair) != 2:
+            return None
+        valid_pair = list(valid_pair)
+        model_entity = pair_info.get("model_entity")
+        apo_entity = pair_info.get("apo_model_entity")
+        holo_entity = pair_info.get("holo_model_entity")
+    elif isinstance(pair_info, (list, tuple)) and len(pair_info) == 2:
+        valid_pair = [str(pair_info[0]), str(pair_info[1])]
+        model_entity = None
+        apo_entity = None
+        holo_entity = None
+    else:
+        return None
+
+    if pair_type == _INTRINSIC_SET:
+        if not model_entity:
+            model_entity = _infer_model_entity(cluster_data, valid_pair)
+        if not model_entity:
+            return None
+        return {
+            "valid_pair": valid_pair,
+            "model_entity": model_entity,
+            "apo_model_entity": None,
+            "holo_model_entity": None,
+        }
+
+    if not apo_entity:
+        apo_entity = next((t for t in valid_pair if str(t).endswith("_m")), None)
+    if not holo_entity:
+        holo_entity = next((t for t in valid_pair if str(t).endswith("_x")), None)
+    if not apo_entity or not holo_entity:
+        return None
+    return {
+        "valid_pair": valid_pair,
+        "model_entity": None,
+        "apo_model_entity": apo_entity,
+        "holo_model_entity": holo_entity,
+    }
+
+
+def _get_holo_predictions(cluster_data: Dict[str, Any], holo_entity: str) -> Dict[str, Any]:
+    """Return per-method prediction info for one holo yaml tag."""
+    raw = cluster_data.get("holo_predictions", {})
+    if holo_entity in raw and isinstance(raw[holo_entity], dict):
+        nested = raw[holo_entity]
+        if nested and isinstance(next(iter(nested.values()), None), dict):
+            sample = next(iter(nested.values()))
+            if "pattern" in sample or "yaml_tag" in sample:
+                return nested
+    for _key, methods_dict in raw.items():
+        if not isinstance(methods_dict, dict):
+            continue
+        if _key == holo_entity:
+            return methods_dict
+        for method_info in methods_dict.values():
+            if isinstance(method_info, dict) and method_info.get("yaml_tag") == holo_entity:
+                return methods_dict
+    return {}
+
+
 def generate_alignment_tasks(
     valid_pairs_file: Path,
     distogram_data_file: Path,
@@ -155,61 +246,52 @@ def generate_alignment_tasks(
                 continue
 
             cluster_data = distogram_data[pair_type][cluster_id]
-            apo_entity: Optional[str] = None
-            holo_entity: Optional[str] = None
+            is_intrinsic = pair_type == _INTRINSIC_SET
 
             for pair_info in pairs_list:
-                if not isinstance(pair_info, dict) or "valid_pair" not in pair_info:
+                normalized = _normalize_pair_info(pair_info, pair_type, cluster_data)
+                if normalized is None:
+                    raw_pair = (
+                        list(pair_info)
+                        if isinstance(pair_info, (list, tuple))
+                        else pair_info.get("valid_pair", pair_info)
+                        if isinstance(pair_info, dict)
+                        else pair_info
+                    )
+                    error_list.append(
+                        {
+                            "pair_type": pair_type,
+                            "cluster_id": cluster_id,
+                            "valid_pair": raw_pair,
+                            "error": (
+                                "Invalid pair entry (expected [tag1, tag2] or dict with valid_pair)"
+                                if not is_intrinsic
+                                else "Invalid pair or could not infer model_entity for intrinsic"
+                            ),
+                        }
+                    )
                     continue
-                valid_pair = pair_info["valid_pair"]
-                mobiles = list(valid_pair)
 
-                if pair_type == "intrinsic":
-                    model_entity = pair_info.get("model_entity")
-                    if not model_entity:
-                        error_list.append(
-                            {
-                                "pair_type": pair_type,
-                                "cluster_id": cluster_id,
-                                "valid_pair": valid_pair,
-                                "error": "No model_entity found",
-                            }
-                        )
-                        continue
+                valid_pair = normalized["valid_pair"]
+                mobiles = list(valid_pair)
+                apo_entity = normalized["apo_model_entity"]
+                holo_entity = normalized["holo_model_entity"]
+
+                if is_intrinsic:
+                    model_entity = normalized["model_entity"]
                     reference_entities = [model_entity]
                 else:
-                    apo_entity = pair_info.get("apo_model_entity")
-                    holo_entity = pair_info.get("holo_model_entity")
-                    if not apo_entity or not holo_entity:
-                        error_list.append(
-                            {
-                                "pair_type": pair_type,
-                                "cluster_id": cluster_id,
-                                "valid_pair": valid_pair,
-                                "error": "No apo/holo_model_entity found",
-                            }
-                        )
-                        continue
                     reference_entities = [apo_entity, holo_entity]
 
                 print(f"  Pair: {valid_pair} -> align to {reference_entities}")
 
-                holo_preds: Dict[str, Any] = {}
-                if pair_type != "intrinsic" and holo_entity is not None:
-                    holo_preds_raw = cluster_data.get("holo_predictions", {})
-                    for _conf_label, methods_dict in holo_preds_raw.items():
-                        if not isinstance(methods_dict, dict):
-                            continue
-                        for _m, method_info in methods_dict.items():
-                            if isinstance(method_info, dict) and method_info.get(
-                                "yaml_tag"
-                            ) == holo_entity:
-                                holo_preds = methods_dict
-                                break
-                        if holo_preds:
-                            break
+                holo_preds = (
+                    _get_holo_predictions(cluster_data, holo_entity)
+                    if not is_intrinsic and holo_entity
+                    else {}
+                )
 
-                if pair_type == "intrinsic":
+                if is_intrinsic:
                     prediction_dict_by_reference = {
                         reference_entities[0]: cluster_data.get("apo_predictions", {})
                     }
@@ -299,7 +381,7 @@ def generate_alignment_tasks(
                                     )
                                 output_path = output_subdir / output_filename
 
-                                if pair_type == "intrinsic":
+                                if is_intrinsic:
                                     method_type = "apo"
                                     target_state = "apo"
                                     reference_state = "apo"
