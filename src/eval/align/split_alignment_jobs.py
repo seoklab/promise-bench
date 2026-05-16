@@ -17,7 +17,20 @@ import sys
 from pathlib import Path
 from typing import List
 
-from utils._config import eval_cfg as E
+from utils._config import eval_cfg as E, pipeline_cfg as C
+
+
+def _struct_align_batch_extra_flags(
+    msa_dir: Path,
+    rep_seq_json: Path,
+    write_cif: bool,
+) -> str:
+    wc = "--write-cif" if write_cif else "--no-write-cif"
+    return (
+        f"--msa-dir {msa_dir.resolve().as_posix()} "
+        f"--rep-seq-json {rep_seq_json.resolve().as_posix()} "
+        f"{wc}"
+    )
 
 
 def split_and_generate_jobs(
@@ -32,6 +45,8 @@ def split_and_generate_jobs(
     *,
     python_exe: str,
     log_dir: Path,
+    msa_dir: Path,
+    rep_seq_json: Path,
     write_cif: bool,
 ) -> None:
     input_json = input_json.resolve()
@@ -52,6 +67,9 @@ def split_and_generate_jobs(
     print(f"Parts: {num_parts}")
     print(f"Tasks per part: ~{tasks_per_part}")
     print(f"Emit: {emit}")
+    print(f"MSA dir: {msa_dir.resolve()}")
+    print(f"Rep-seq JSON: {rep_seq_json.resolve()}")
+    print(f"Write aligned CIF: {write_cif}")
 
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -84,14 +102,15 @@ def split_and_generate_jobs(
     results_dir = output_dir / "align_results"
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    wc = " --no-write-cif" if not write_cif else ""
+    batch_extra = _struct_align_batch_extra_flags(msa_dir, rep_seq_json, write_cif)
 
     def one_local_line(jp: Path, part_idx: int) -> str:
         part_num = str(part_idx + 1).zfill(4)
         rp = (results_dir / f"align_part{part_num}.json").resolve()
         return (
             f"{python_exe} -m eval.align.struct_align_batch "
-            f"--json {jp.as_posix()} --results-json {rp.as_posix()}{wc}\n"
+            f"--json {jp.as_posix()} --results-json {rp.as_posix()} "
+            f"{batch_extra}\n"
         )
 
     def one_sbatch_inner(jp: Path, part_idx: int) -> str:
@@ -185,10 +204,22 @@ def main() -> None:
         help="Python interpreter (must have promise-data + nurikit installed)",
     )
     p.add_argument(
+        "--msa-dir",
+        type=Path,
+        default=C.dir("msas"),
+        help="Passed to struct_align_batch (default: pipeline.dirs.msas)",
+    )
+    p.add_argument(
+        "--rep-seq-json",
+        type=Path,
+        default=C.file("rep_seq"),
+        help="Passed to struct_align_batch (default: pipeline.files.rep_seq)",
+    )
+    p.add_argument(
         "--write-cif",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Emit aligned mmCIF writes (default: on; use --no-write-cif in generated commands)",
+        help="Pass --write-cif or --no-write-cif to generated struct_align_batch commands",
     )
     p.add_argument(
         "--log-dir",
@@ -202,6 +233,8 @@ def main() -> None:
     p.add_argument("--sbatch-cpus", type=int, default=1)
 
     args = p.parse_args()
+    if args.rep_seq_json is None:
+        p.error("--rep-seq-json is required (or set pipeline.files.rep_seq in config/config.yaml)")
 
     split_and_generate_jobs(
         input_json=args.input,
@@ -214,6 +247,8 @@ def main() -> None:
         sbatch_cpus=args.sbatch_cpus,
         python_exe=args.python,
         log_dir=args.log_dir,
+        msa_dir=args.msa_dir,
+        rep_seq_json=args.rep_seq_json,
         write_cif=args.write_cif,
     )
 
