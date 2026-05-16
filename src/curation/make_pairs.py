@@ -93,16 +93,28 @@ def get_predictions(examples_dir: Path, set_name: str, cluster: str, tag: str) -
 
 
 def add_predictions_to_data(data: Dict[str, Dict], examples_dir: Optional[Path]) -> Dict[str, Dict]:
+    """Populate apo_predictions / holo_predictions for every cluster.
+
+    Apo: multi-conformation clusters can list several CSV tags, but typically
+    only one entity has on-disk predictions. Bioemu matches at the cluster
+    level (tag-agnostic) and would always "win" on the first tag, so we pick
+    the apo_tag whose ``get_predictions`` yields the highest model coverage.
+    Holo: nest per ``holo_tag`` -> ``{tag: {model: {pattern, count}}}``.
+    """
     for set_name, clusters in data.items():
         for cluster_name, info in clusters.items():
-            apo_preds = {}
-            if info["apo_tags"]:
-                apo_preds = get_predictions(examples_dir, set_name, cluster_name, info["apo_tags"][0])
+            apo_preds: Dict[str, dict] = {}
+            for tag in info.get("apo_tags") or []:
+                preds = get_predictions(examples_dir, set_name, cluster_name, tag)
+                if len(preds) > len(apo_preds):
+                    apo_preds = preds
             info["apo_predictions"] = apo_preds
-            
-            holo_preds = {}
-            if info["holo_tags"]:
-                holo_preds = get_predictions(examples_dir, set_name, cluster_name, info["holo_tags"][0])
+
+            holo_preds: Dict[str, Dict[str, dict]] = {}
+            for tag in info.get("holo_tags") or []:
+                preds = get_predictions(examples_dir, set_name, cluster_name, tag)
+                if preds:
+                    holo_preds[tag] = preds
             info["holo_predictions"] = holo_preds
     return data
 
@@ -605,11 +617,8 @@ def enhance_cluster_data(
                 pattern = get_distogram_path_pattern(
                     method, set_name, cluster_id, yaml_tag=""
                 )
-                if not pattern:
-                    raise DistogramPatternError(
-                        f"Distogram pattern not defined for method '{method}' cluster '{cluster_id}'"
-                    )
-                enhanced_method_info["distogram_pattern"] = pattern
+                if pattern:
+                    enhanced_method_info["distogram_pattern"] = pattern
             else:
                 # For other methods, try to extract yaml_tag from pattern
                 pattern = method_info.get("pattern", "")
@@ -627,18 +636,13 @@ def enhance_cluster_data(
                     )
                     enhanced_method_info["target_chain"] = target_chain
 
-                    # Add distogram pattern for methods that support it
+                    # Add distogram pattern when configured (silently skipped otherwise).
                     if method in ("af3", "boltz-1", "boltz-2"):
                         pattern = get_distogram_path_pattern(
                             method, pred_set, cluster_id, yaml_tag
                         )
-
-                        if not pattern:
-                            raise DistogramPatternError(
-                                f"Distogram pattern not defined for method '{method}' cluster '{cluster_id}' yaml_tag '{yaml_tag}'"
-                            )
-
-                        enhanced_method_info["distogram_pattern"] = pattern
+                        if pattern:
+                            enhanced_method_info["distogram_pattern"] = pattern
 
                         # Add AF3 / Boltz chain mapping if available
                         if method == "af3" and af3_chain_json:
@@ -703,18 +707,13 @@ def enhance_cluster_data(
                         )
                         enhanced_method_info["target_chain"] = target_chain
 
-                        # Add distogram pattern for methods that support it
+                        # Add distogram pattern when configured (silently skipped otherwise).
                         if method in ("af3", "boltz-1", "boltz-2"):
                             pattern = get_distogram_path_pattern(
                                 method, path_method_type, cluster_id, yaml_tag
                             )
-
-                            if not pattern:
-                                raise DistogramPatternError(
-                                    f"Distogram pattern not defined for method '{method}' cluster '{cluster_id}' yaml_tag '{yaml_tag}'"
-                                )
-
-                            enhanced_method_info["distogram_pattern"] = pattern
+                            if pattern:
+                                enhanced_method_info["distogram_pattern"] = pattern
 
                             if method == "af3" and af3_chain_json:
                                 af3_mapping = get_chain_mapping(
