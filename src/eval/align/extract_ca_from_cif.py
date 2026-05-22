@@ -1,4 +1,4 @@
-"""Extract CA coordinates from mmCIF (foundation ``extract_ca_from_cif`` logic).
+"""Extract CA coordinates from mmCIF or PDB (foundation ``extract_ca_from_cif`` logic).
 
 Used by ``struct_align_batch`` so ``seq_id_to_coord`` keys match step6 / a3m mapping.
 """
@@ -15,9 +15,21 @@ import numpy as np
 
 STANDARD_AA = set("ACDEFGHIKLMNPQRSTVWY")
 
+_PDB_SUFFIXES = {".pdb", ".ent"}
+
 
 def to_standard_aa(one_letter: str) -> str:
     return one_letter if one_letter in STANDARD_AA else "X"
+
+
+def _real_suffix(path: Path) -> str:
+    if path.suffix == ".gz" and len(path.suffixes) >= 2:
+        return path.suffixes[-2].lower()
+    return path.suffix.lower()
+
+
+def is_pdb_path(path: Path) -> bool:
+    return _real_suffix(path) in _PDB_SUFFIXES
 
 
 def read_cif_doc(cif_path: Path) -> gemmi.cif.Document:
@@ -46,6 +58,13 @@ def entity_poly_to_dict(block: gemmi.cif.Block) -> Dict[str, Dict[str, str]]:
 
 
 def read_cif_structure(cif_path: Path) -> gemmi.Structure:
+    """Read a CIF or PDB file into a ``gemmi.Structure``.
+
+    The name is kept for backward compatibility, but PDB / .ent (optionally .gz)
+    inputs are also supported transparently via gemmi's format auto-detection.
+    """
+    if is_pdb_path(cif_path):
+        return gemmi.read_structure(cif_path.as_posix())
     if cif_path.suffix == ".gz":
         with gzip.open(cif_path, "rt", encoding="utf-8") as f:
             content = f.read()
@@ -88,6 +107,63 @@ def extract_ca_idx_map(
     return idx_to_ca, coords, res_to_coord_map, "".join(sequence)
 
 
+def _extract_ca_info_pdb(
+    pdb_path: Path,
+    chain_id: str,
+    log_error,
+) -> Optional[Dict[str, Any]]:
+    """CA extraction for PDB inputs.
+
+    Keys ``seq_id_to_coord`` by 0-based residue index in the requested chain so
+    downstream a3m mapping (sequential model indices) lines up the same way as
+    the CIF path does for a clean monomer.
+    """
+    try:
+        structure = read_cif_structure(pdb_path)
+    except Exception as e:
+        log_error("ReadError", str(e))
+        return None
+
+    target_chain = None
+    for model in structure:
+        for chain in model:
+            if chain.name == chain_id:
+                target_chain = chain
+                break
+        if target_chain is not None:
+            break
+    if target_chain is None:
+        log_error("ChainNotFound", f"Chain {chain_id} not found in {pdb_path}")
+        return None
+
+    seq_id_to_coord: Dict[int, List[float]] = {}
+    sequence: List[str] = []
+    idx = 0
+    for residue in target_chain:
+        ca_atom = residue.find_atom("CA", "*")
+        if not ca_atom:
+            continue
+        pos = ca_atom.pos
+        seq_id_to_coord[idx] = [float(pos.x), float(pos.y), float(pos.z)]
+        one_letter = gemmi.find_tabulated_residue(residue.name).one_letter_code
+        sequence.append(to_standard_aa(one_letter))
+        idx += 1
+
+    if not seq_id_to_coord:
+        log_error("NoCAAtoms", f"No CA atoms found for chain={chain_id}")
+        return None
+
+    seq_str = "".join(sequence)
+    return {
+        "chain": chain_id,
+        "sequence": seq_str,
+        "full_sequence": seq_str,
+        "seq_id_to_coord": seq_id_to_coord,
+        "num_residues": len(seq_id_to_coord),
+        "full_length": len(seq_str),
+    }
+
+
 def extract_ca_info(
     cif_path: Path,
     chain_id: str,
@@ -105,6 +181,9 @@ def extract_ca_info(
                     "message": message,
                 }
             )
+
+    if is_pdb_path(cif_path):
+        return _extract_ca_info_pdb(cif_path, chain_id, log_error)
 
     try:
         doc = read_cif_doc(cif_path)
