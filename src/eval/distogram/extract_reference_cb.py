@@ -2,9 +2,10 @@
 """
 Extract CB coordinates for distogram evaluation.
 
-Primary mode in this repo is ``--distogram``: read a distogram-analysis JSON,
-write per-reference ``*_cb.json`` files, and emit an augmented JSON that adds
-``reference_cb_json`` paths so downstream distogram tasks can load coordinates.
+Primary mode in this repo is ``--answer-map``: read the
+``seq_cluster_to_answer_map.json`` from ``curation.make_pairs``, write per-reference
+``*_cb.json`` files, and emit an augmented JSON that adds ``reference_cb_json``
+paths so downstream distogram tasks can load coordinates.
 
 Notes
 -----
@@ -921,9 +922,13 @@ def main():
         help="Base directory for --symlink (default: eval.external.aligned_cif_dir)",
     )
     parser.add_argument(
-        "--distogram",
+        "--answer-map",
         type=str,
-        help="Path to distogram_analysis_data_final.json to extract references from",
+        help=(
+            "Path to seq_cluster_to_answer_map.json (from curation.make_pairs); "
+            "extracts Cb for every reference CIF and writes "
+            "<stem>_with_cb_paths.json next to the input."
+        ),
     )
     parser.add_argument(
         "--ref-output",
@@ -945,15 +950,15 @@ def main():
                 "--base-dir or eval.external.aligned_cif_dir is required when using --symlink"
             )
         create_symlinks(args.symlink, base)
-    elif args.distogram:
-        # Process distogram JSON and extract all reference CIF chains
-        dist_path = Path(args.distogram)
-        if not dist_path.exists():
-            raise FileNotFoundError(f"Distogram JSON not found: {dist_path}")
+    elif args.answer_map:
+        # Process answer-map JSON and extract Cb for every reference CIF it lists.
+        answer_map_path = Path(args.answer_map)
+        if not answer_map_path.exists():
+            raise FileNotFoundError(f"Answer-map JSON not found: {answer_map_path}")
 
         ref_output = E.distogram_ref_coords_dir(args.ref_output)
         total_refs, errors = process_distogram_file(
-            dist_path,
+            answer_map_path,
             ref_output,
             skip_existing=not args.no_skip,
             start_idx=args.start,
@@ -963,8 +968,8 @@ def main():
         # Save errors if any
         if errors:
             error_path = (
-                dist_path.parent
-                / f"extract_cb_errors_distogram_{args.start}_{args.end or 'end'}.json"
+                answer_map_path.parent
+                / f"extract_cb_errors_answer_map_{args.start}_{args.end or 'end'}.json"
             )
             with open(error_path, "w") as f:
                 json.dump(errors, f, indent=2)

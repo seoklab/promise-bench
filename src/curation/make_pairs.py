@@ -8,7 +8,7 @@ Usage:
 
 Next: alignment tasks — ``python -m eval.align.generate_alignment_tasks --help``.
 Distogram eval consumes this same enriched map (optionally after
-``python -m eval.distogram.extract_reference_cb --distogram …`` for ``reference_cb_json``).
+``python -m eval.distogram.extract_reference_cb --answer-map …`` for ``reference_cb_json``).
 """
 
 import json

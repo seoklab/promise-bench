@@ -446,9 +446,10 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--valid-pairs", type=Path, default=E.file("valid_pairs"))
     p.add_argument(
-        "--distogram-data",
+        "--answer-map",
         type=Path,
         default=C.file("answer_map") or Path("seq_cluster_to_answer_map.json"),
+        help="Path to seq_cluster_to_answer_map.json (from curation.make_pairs).",
     )
     p.add_argument(
         "--output",
@@ -465,7 +466,7 @@ def main() -> None:
     args = p.parse_args()
     generate_alignment_tasks(
         valid_pairs_file=args.valid_pairs,
-        distogram_data_file=args.distogram_data,
+        distogram_data_file=args.answer_map,
         output_json=args.output,
         output_dir=args.output_dir,
         cif_dir=args.cif_dir,
