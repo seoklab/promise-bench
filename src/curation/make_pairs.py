@@ -459,7 +459,15 @@ def get_target_chain_for_method(
         )
 
     if mkey == "boltz1":
-        return extract_chain_from_yaml_tag(yaml_tag)
+        interested_chain = extract_chain_from_yaml_tag(yaml_tag)
+        return _require_chain_mapping(
+            method="boltz-1",
+            interested_chain=interested_chain,
+            cluster_id=cluster_id,
+            yaml_tag=yaml_tag,
+            map_set_name=map_set_name,
+            mapping_json_path=_map_cfg_path(de.get("boltz1_chain_mappings")),
+        )
 
     if mkey == "chai":
         interested_chain_id = extract_chain_from_yaml_tag(yaml_tag)
@@ -687,6 +695,7 @@ def enhance_cluster_data(
     de = _enrich_cfg()
     af3_chain_json = _map_cfg_path(de.get("af3_chain_mappings"))
     boltz_chain_json = _map_cfg_path(de.get("boltz_chain_mappings"))
+    boltz1_chain_json = _map_cfg_path(de.get("boltz1_chain_mappings"))
 
     # Add MSA path at cluster level
     enhanced_data["msa_path"] = get_msa_path(cluster_id)
@@ -779,6 +788,15 @@ def enhance_cluster_data(
                             )
                             if boltz_mapping:
                                 enhanced_method_info["chain_mapping"] = boltz_mapping
+                        elif method == "boltz-1" and boltz1_chain_json:
+                            boltz1_mapping = get_chain_mapping(
+                                cluster_id,
+                                yaml_tag,
+                                set_name,
+                                boltz1_chain_json,
+                            )
+                            if boltz1_mapping:
+                                enhanced_method_info["chain_mapping"] = boltz1_mapping
                 else:
                     # If yaml_tag extraction fails, add a default target_chain
                     print(
@@ -849,6 +867,17 @@ def enhance_cluster_data(
                                 if boltz_mapping:
                                     enhanced_method_info["chain_mapping"] = (
                                         boltz_mapping
+                                    )
+                            elif method == "boltz-1" and boltz1_chain_json:
+                                boltz1_mapping = get_chain_mapping(
+                                    cluster_id,
+                                    yaml_tag,
+                                    set_name,
+                                    boltz1_chain_json,
+                                )
+                                if boltz1_mapping:
+                                    enhanced_method_info["chain_mapping"] = (
+                                        boltz1_mapping
                                     )
                     else:
                         # If yaml_tag extraction fails, add a default target_chain
