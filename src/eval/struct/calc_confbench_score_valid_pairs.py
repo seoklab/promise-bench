@@ -425,6 +425,11 @@ def _process_induced_set(
     if apo_tag is None or holo_tag is None:
         return {}
 
+    if apo_model_entity is None:
+        apo_model_entity = apo_tag
+    if holo_model_entity is None:
+        holo_model_entity = holo_tag
+
     apo_ref = parse_tag_to_base(apo_tag)
     holo_ref = parse_tag_to_base(holo_tag)
 
