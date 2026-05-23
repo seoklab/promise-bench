@@ -9,7 +9,7 @@ but reads prediction↔reference RMSDs from ProMiSE-bench alignment-batch output
 Inputs
 ------
 - ``valid_pairs.json``: expected to be keyed by:
-  ``apo-monomers``, ``ligand-induced``, ``protein-induced``.
+  ``intrinsic``, ``ligand-induced``, ``protein-induced``.
 - Alignment results: JSON emitted by ``eval.align.struct_align_batch`` (typically
   via ``eval.align.split_alignment_jobs``) containing per-task ``rmsd_ca``.
 - reference↔reference metrics: JSON emitted by ``eval.struct.calc_reference_structural_metrics``
@@ -24,6 +24,7 @@ Output
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 from collections import defaultdict
@@ -37,7 +38,7 @@ import pandas as pd
 from utils._config import eval_cfg as E
 
 
-MODELS = ["af3", "boltz1", "boltz2", "chai", "bioemu"]
+MODELS = ["af3", "boltz-1", "boltz-2", "chai-1", "bioemu"]
 
 
 def parse_tag_to_base(tag: str) -> str:
@@ -107,16 +108,88 @@ def _load_json(path: Path) -> Any:
         return json.load(f)
 
 
-def _iter_align_rows(align_results: Path) -> Iterable[Dict[str, Any]]:
-    if align_results.is_file():
-        data = _load_json(align_results)
-        for row in data:
-            yield row
-        return
-    for p in sorted(align_results.glob("align_part*.json")):
-        data = _load_json(p)
-        for row in data:
-            yield row
+# ---------------------------------------------------------------------------
+# In-memory caches: align rows (1.4GB-ish) and ref-metrics files are otherwise
+# scanned once per (pair × model × group), turning the script into a multi-hour
+# disk-bound job. We load each artefact exactly once, index it, and let
+# subsequent lookups hit the index.
+# ---------------------------------------------------------------------------
+
+
+def _normalize_align_sources(
+    align_results: Any,
+) -> Tuple[str, ...]:
+    """Coerce ``--align-results`` value(s) into an immutable, hashable tuple.
+
+    Accepts a single :class:`Path`/str (legacy) or a list/tuple of them
+    (multi-source mode used to merge separately-run alignment batches such as
+    ``job_batches/align_results`` + ``job_batches_boltz2/align_results``).
+    """
+    if align_results is None:
+        return ()
+    if isinstance(align_results, (str, Path)):
+        return (str(align_results),)
+    return tuple(str(p) for p in align_results)
+
+
+@functools.lru_cache(maxsize=8)
+def _load_all_align_rows_cached(
+    align_results_strs: Tuple[str, ...],
+) -> Tuple[Dict[str, Any], ...]:
+    """Load every row from one or more align_results sources ONCE.
+
+    Each source may be a directory containing ``align_part*.json`` files or a
+    single JSON file. Results from all sources are concatenated. Returns an
+    immutable tuple so :class:`functools.lru_cache` can hold the result
+    safely for repeated calls within the same process.
+    """
+    rows: List[Dict[str, Any]] = []
+    for s in align_results_strs:
+        align_results = Path(s)
+        if align_results.is_file():
+            try:
+                rows.extend(_load_json(align_results))
+            except Exception as e:
+                print(f"  Warning: failed to load {align_results}: {e}")
+        else:
+            files = sorted(align_results.glob("align_part*.json"))
+            if not files:
+                print(f"  Warning: no align_part*.json under {align_results}")
+            for p in files:
+                try:
+                    rows.extend(_load_json(p))
+                except Exception as e:
+                    print(f"  Warning: failed to load {p}: {e}")
+    return tuple(rows)
+
+
+@functools.lru_cache(maxsize=8)
+def _align_index_cached(
+    align_results_strs: Tuple[str, ...],
+) -> Dict[Tuple[str, str, str], Tuple[Dict[str, Any], ...]]:
+    """Group rows by ``(prediction_method, pair_type, cluster_id)``.
+
+    Only rows with ``ok == True`` are kept, so the per-call filter loop in
+    :func:`_load_prediction_rmsds_from_align_results` can scan a small bucket
+    instead of the full 800k-row list.
+    """
+    rows = _load_all_align_rows_cached(align_results_strs)
+    buckets: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if not row.get("ok"):
+            continue
+        key = (
+            str(row.get("prediction_method", "")),
+            str(row.get("pair_type", "")),
+            str(row.get("cluster_id", "")),
+        )
+        buckets[key].append(row)
+    return {k: tuple(v) for k, v in buckets.items()}
+
+
+def _iter_align_rows(align_results: Any) -> Iterable[Dict[str, Any]]:
+    """Backward-compatible iterator (no longer used on the hot path)."""
+    yield from _load_all_align_rows_cached(_normalize_align_sources(align_results))
 
 
 def _infer_model_entity_from_row(row: Dict[str, Any]) -> Optional[str]:
@@ -132,7 +205,7 @@ def _infer_model_entity_from_row(row: Dict[str, Any]) -> Optional[str]:
 
 
 def _load_prediction_rmsds_from_align_results(
-    align_results: Path,
+    align_results: Any,
     model: str,
     set_name: str,
     cluster_id: str,
@@ -144,17 +217,11 @@ def _load_prediction_rmsds_from_align_results(
       { modeled_key, ref_key, ca_rmsd, mobile_cif, valid_pair }
     """
     target_set = set(target_valid_pair) if target_valid_pair else None
-    out: List[Dict[str, Any]] = []
-    for row in _iter_align_rows(align_results):
-        if not row.get("ok"):
-            continue
-        if str(row.get("prediction_method", "")) != model:
-            continue
-        if str(row.get("pair_type", "")) != set_name:
-            continue
-        if str(row.get("cluster_id", "")) != str(cluster_id):
-            continue
+    index = _align_index_cached(_normalize_align_sources(align_results))
+    bucket = index.get((str(model), str(set_name), str(cluster_id)), ())
 
+    out: List[Dict[str, Any]] = []
+    for row in bucket:
         inferred_entity = _infer_model_entity_from_row(row)
         if model_entity and inferred_entity != model_entity:
             continue
@@ -186,17 +253,31 @@ def _load_prediction_rmsds_from_align_results(
     return out
 
 
+@functools.lru_cache(maxsize=4096)
+def _load_cluster_ref_metrics_cached(
+    ref_metrics_dir_str: str, cluster_id: str
+) -> Tuple[Dict[str, Any], ...]:
+    """Read every ``*_metrics.json`` under one cluster's aligned_references dir.
+
+    Cached per (ref_metrics_dir, cluster_id) so intrinsic / induced-set
+    lookups against the same cluster do not re-walk the directory tree.
+    """
+    base = Path(ref_metrics_dir_str) / "aligned_references" / cluster_id
+    if not base.exists():
+        return ()
+    rows: List[Dict[str, Any]] = []
+    for metrics_file in base.rglob("*_metrics.json"):
+        try:
+            rows.append(_load_json(metrics_file))
+        except Exception:
+            continue
+    return tuple(rows)
+
+
 def _load_reference_rmsd_from_metrics(
     ref_metrics_dir: Path, cluster_id: str, ref1_base: str, ref2_base: str
 ) -> Optional[float]:
-    base = ref_metrics_dir / "aligned_references" / cluster_id
-    if not base.exists():
-        return None
-    for metrics_file in base.rglob("*_metrics.json"):
-        try:
-            data = _load_json(metrics_file)
-        except Exception:
-            continue
+    for data in _load_cluster_ref_metrics_cached(str(ref_metrics_dir), str(cluster_id)):
         ca_rmsd = data.get("ca_rmsd")
         if ca_rmsd is None:
             continue
@@ -216,8 +297,8 @@ def _extract_pair_for_set(pair_info: Any) -> Tuple[List[str], Dict[str, Any]]:
     return list(pair_info), {"valid_pair": list(pair_info)}
 
 
-def process_apo_monomers(
-    align_results: Path,
+def process_intrinsic(
+    align_results: Any,
     ref_metrics_dir: Path,
     pair_info: Dict,
     cluster_id: str,
@@ -229,7 +310,7 @@ def process_apo_monomers(
     model_entity = pair_info.get("model_entity") if isinstance(pair_info, dict) else None
 
     result: Dict[str, Any] = {
-        "set_type": "apo-monomers",
+        "set_type": "intrinsic",
         "cluster_id": cluster_id,
         "valid_pair": valid_pair,
         "model_entity": model_entity,
@@ -246,7 +327,7 @@ def process_apo_monomers(
     if rmsd_ref is None:
         return result
 
-    set_name = "apo-monomers"
+    set_name = "intrinsic"
     for model in models:
         model_result: Dict[str, Any] = {
             "predictions": [],
@@ -327,7 +408,7 @@ def process_apo_monomers(
 
 def _process_induced_set(
     set_type: str,
-    align_results: Path,
+    align_results: Any,
     ref_metrics_dir: Path,
     pair_info: Dict,
     cluster_id: str,
@@ -489,10 +570,10 @@ def _process_induced_set(
 
 def validate_results(all_results: Dict[str, Any], valid_pairs_data: Dict[str, Any], models: List[str]) -> Dict[str, Any]:
     validation: Dict[str, Any] = {
-        "missing": {"apo-monomers": [], "ligand-induced": [], "protein-induced": []},
-        "complete": {"apo-monomers": [], "ligand-induced": [], "protein-induced": []},
+        "missing": {"intrinsic": [], "ligand-induced": [], "protein-induced": []},
+        "complete": {"intrinsic": [], "ligand-induced": [], "protein-induced": []},
         "summary": {
-            "apo-monomers": {"total_pairs": 0, "complete_pairs": 0, "missing_by_model": {}},
+            "intrinsic": {"total_pairs": 0, "complete_pairs": 0, "missing_by_model": {}},
             "ligand-induced": {"total_pairs": 0, "complete_pairs": 0, "missing_by_model": {}},
             "protein-induced": {"total_pairs": 0, "complete_pairs": 0, "missing_by_model": {}},
         },
@@ -501,7 +582,7 @@ def validate_results(all_results: Dict[str, Any], valid_pairs_data: Dict[str, An
         for model in models:
             validation["summary"][set_type]["missing_by_model"][model] = {"apo": 0, "holo": 0}
 
-    for set_type in ["apo-monomers", "ligand-induced", "protein-induced"]:
+    for set_type in ["intrinsic", "ligand-induced", "protein-induced"]:
         set_pairs = valid_pairs_data.get(set_type, {})
         for cluster_id, pairs in (set_pairs or {}).items():
             for pair_info in pairs or []:
@@ -516,7 +597,7 @@ def validate_results(all_results: Dict[str, Any], valid_pairs_data: Dict[str, An
 
                 for model in models:
                     model_data = result.get("models", {}).get(model, {})
-                    if set_type == "apo-monomers":
+                    if set_type == "intrinsic":
                         n_pred = model_data.get("n_predictions", 0)
                         score = model_data.get("mean_confbench_score")
                         if n_pred == 0 or score is None:
@@ -568,7 +649,14 @@ def main() -> None:
         "--align-results",
         type=Path,
         required=True,
-        help="Directory containing align_part*.json (or a single json file)",
+        nargs="+",
+        help=(
+            "One or more directories containing align_part*.json (or single "
+            "json files). Multiple sources are merged in-memory, useful when "
+            "different prediction methods were aligned in separate batch "
+            "runs (e.g. main job_batches + a boltz-2 rerun under "
+            "job_batches_boltz2)."
+        ),
     )
     p.add_argument(
         "--ref-metrics-dir",
@@ -592,7 +680,7 @@ def main() -> None:
         "--models",
         type=str,
         default=",".join(MODELS),
-        help="Comma-separated model keys to include (default: af3,boltz1,boltz2,chai,bioemu)",
+        help="Comma-separated model keys to include (default: af3,boltz-1,boltz-2,chai-1,bioemu)",
     )
     args = p.parse_args()
 
@@ -604,7 +692,7 @@ def main() -> None:
     models = [m.strip() for m in args.models.split(",") if m.strip()]
 
     all_results: Dict[str, Dict[str, Any]] = {
-        "apo-monomers": {},
+        "intrinsic": {},
         "ligand-induced": {},
         "protein-induced": {},
     }
@@ -612,16 +700,16 @@ def main() -> None:
     out_dir = args.output_dir or Path(args.output_json).parent
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # apo-monomers
-    apo_mono_data = valid_pairs_data.get("apo-monomers", {})
-    for cluster_id, pairs in (apo_mono_data or {}).items():
+    # intrinsic dynamics set
+    intrinsic_data = valid_pairs_data.get("intrinsic", {})
+    for cluster_id, pairs in (intrinsic_data or {}).items():
         for pair_info in pairs or []:
             pair, info = _extract_pair_for_set(pair_info)
             if len(pair) != 2:
                 continue
-            res = process_apo_monomers(args.align_results, args.ref_metrics_dir, info, str(cluster_id), models)
+            res = process_intrinsic(args.align_results, args.ref_metrics_dir, info, str(cluster_id), models)
             pair_key = f"{cluster_id}_{pair[0]}_{pair[1]}"
-            all_results["apo-monomers"][pair_key] = res
+            all_results["intrinsic"][pair_key] = res
 
     # induced sets
     for set_type in ["ligand-induced", "protein-induced"]:
@@ -643,12 +731,12 @@ def main() -> None:
 
     # summary CSV (match original filenames)
     summary_rows: List[Dict[str, Any]] = []
-    for pair_key, result in all_results["apo-monomers"].items():
+    for pair_key, result in all_results["intrinsic"].items():
         for model in models:
             model_data = result.get("models", {}).get(model, {})
             summary_rows.append(
                 {
-                    "set_type": "apo-monomers",
+                    "set_type": "intrinsic",
                     "cluster_id": result.get("cluster_id"),
                     "model": model,
                     "prediction_type": "apo",
@@ -706,7 +794,7 @@ def main() -> None:
 
     # validation report
     valid_pairs_for_validation = {
-        "apo-monomers": valid_pairs_data.get("apo-monomers", {}),
+        "intrinsic": valid_pairs_data.get("intrinsic", {}),
         "ligand-induced": valid_pairs_data.get("ligand-induced", {}),
         "protein-induced": valid_pairs_data.get("protein-induced", {}),
     }
