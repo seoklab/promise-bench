@@ -11,6 +11,7 @@ Distogram eval consumes this same enriched map (optionally after
 ``python -m eval.distogram.extract_reference_cb --answer-map …`` for ``reference_cb_json``).
 """
 
+import functools
 import json
 import csv
 import string
@@ -368,11 +369,52 @@ def get_chain_match_from_fasta(fasta_file: Path) -> Dict[str, str]:
     return chain_match
 
 
-def _fallback_chain_letter(id_str: str) -> str:
-    s = (id_str or "").strip()
-    if not s:
-        return ""
-    return s[0] if s[0].isalpha() else s
+class MissingChainMappingEntry(KeyError):
+    """Raised when the AF3/Boltz chain-mapping JSON has no entry for a
+    given ``(method, set, cluster, yaml_tag)`` and the requested
+    ``interested_chain``.
+
+    There is no silent fallback: every prediction must be backed by an
+    explicit entry in the chain-mapping JSON. The error message lists the
+    exact key the lookup probed, so the missing entry can be patched into
+    the JSON.
+    """
+
+
+def _require_chain_mapping(
+    method: str,
+    interested_chain: str,
+    cluster_id: str,
+    yaml_tag: str,
+    map_set_name: str,
+    mapping_json_path: Optional[str],
+) -> str:
+    """Look up the modeled chain id for ``interested_chain``; raise if absent.
+
+    Probes every alias defined in :data:`_CHAIN_MAPPING_SET_ALIASES` so an
+    ``intrinsic`` entry can be resolved from ``apo-monomers`` /
+    ``ligand-induced`` / ``protein-induced`` (and vice versa). All Boltz /
+    AF3 chain-mapping JSONs have been verified to have *zero* cross-set
+    mapping conflicts, so this fallback is safe.
+    """
+    if not mapping_json_path:
+        raise MissingChainMappingEntry(
+            f"{method}: chain-mapping JSON path is not configured (set "
+            f"pipeline.distogram_enrich.{'af3' if method == 'af3' else 'boltz'}_chain_mappings)"
+        )
+    mapping = get_chain_mapping(cluster_id, yaml_tag, map_set_name, mapping_json_path)
+    if mapping is not None and interested_chain in mapping:
+        return mapping[interested_chain]
+    probed_keys = [
+        f"{st}/{cluster_id}/{yaml_tag}"
+        for st in _CHAIN_MAPPING_SET_ALIASES.get(
+            (map_set_name or "").strip(), ((map_set_name or "").strip(),)
+        )
+    ]
+    raise MissingChainMappingEntry(
+        f"{method}: no entry in {mapping_json_path} for "
+        f"interested_chain={interested_chain!r}. Probed keys: {probed_keys}"
+    )
 
 
 def get_target_chain_for_method(
@@ -396,21 +438,25 @@ def get_target_chain_for_method(
     }.get(method, method)
     if mkey == "af3":
         interested_chain = extract_chain_from_yaml_tag(yaml_tag)
-        p = _map_cfg_path(de.get("af3_chain_mappings"))
-        if p:
-            m = get_chain_mapping(cluster_id, yaml_tag, map_set_name, p)
-            if m is not None and interested_chain in m:
-                return m[interested_chain]
-        return _fallback_chain_letter(interested_chain)
+        return _require_chain_mapping(
+            method="af3",
+            interested_chain=interested_chain,
+            cluster_id=cluster_id,
+            yaml_tag=yaml_tag,
+            map_set_name=map_set_name,
+            mapping_json_path=_map_cfg_path(de.get("af3_chain_mappings")),
+        )
 
     if mkey == "boltz2":
         interested_chain = extract_chain_from_yaml_tag(yaml_tag)
-        p = _map_cfg_path(de.get("boltz_chain_mappings"))
-        if p:
-            m = get_chain_mapping(cluster_id, yaml_tag, map_set_name, p)
-            if m is not None and interested_chain in m:
-                return m[interested_chain]
-        return _fallback_chain_letter(interested_chain)
+        return _require_chain_mapping(
+            method="boltz-2",
+            interested_chain=interested_chain,
+            cluster_id=cluster_id,
+            yaml_tag=yaml_tag,
+            map_set_name=map_set_name,
+            mapping_json_path=_map_cfg_path(de.get("boltz_chain_mappings")),
+        )
 
     if mkey == "boltz1":
         return extract_chain_from_yaml_tag(yaml_tag)
@@ -422,13 +468,23 @@ def get_target_chain_for_method(
         if segment == "intrinsic":
             return "A"
         root = _resolve_path(de.get("chai_fasta_root"))
-        if root is not None:
-            fasta_path = root / segment / cluster_id / f"{yaml_tag}.fa"
-            if fasta_path.exists():
-                chain_match = get_chain_match_from_fasta(fasta_path)
-                if interested_chain_id in chain_match:
-                    return chain_match[interested_chain_id]
-        return _fallback_chain_letter(interested_chain_id)
+        if root is None:
+            raise MissingChainMappingEntry(
+                "chai-1: chai_fasta_root is not configured (set "
+                "pipeline.distogram_enrich.chai_fasta_root)"
+            )
+        fasta_path = root / segment / cluster_id / f"{yaml_tag}.fa"
+        if not fasta_path.exists():
+            raise MissingChainMappingEntry(
+                f"chai-1: fasta not found for chain lookup: {fasta_path}"
+            )
+        chain_match = get_chain_match_from_fasta(fasta_path)
+        if interested_chain_id not in chain_match:
+            raise MissingChainMappingEntry(
+                f"chai-1: interested_chain={interested_chain_id!r} not in fasta "
+                f"chain_match {sorted(chain_match.keys())} ({fasta_path})"
+            )
+        return chain_match[interested_chain_id]
 
     if mkey == "bioemu":
         return "A"
@@ -447,25 +503,84 @@ def extract_chain_from_yaml_tag(yaml_tag: str) -> str:
     return ""
 
 
+# Set-name aliasing for chain-mapping JSON lookup.
+#
+# Two distinct concerns are unified here:
+#
+# 1. Naming alias: the chain-mapping JSONs label the intrinsic-dynamics set as
+#    ``apo-monomers`` while the rest of the pipeline labels it ``intrinsic``.
+#    Both spellings must resolve to the same entry.
+# 2. Cross-set fallback for monomers: a handful of intrinsic clusters have no
+#    monomer entry curated under their own set (yet the same protein appears
+#    as a monomer in another set with identical chain renumbering — verified:
+#    0 conflicts across all (cluster, yaml_tag) entries in both JSONs). For
+#    intrinsic, fall back to ligand-induced/protein-induced so we never need
+#    a name-truncating fallback (e.g. ``A1`` → ``A``).
+#
+# The induced sets are *not* allowed to fall back to intrinsic; that would
+# be incorrect for genuinely ligand/protein-bound entries that don't share
+# the monomer's chain layout.
+_CHAIN_MAPPING_SET_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "intrinsic": ("intrinsic", "apo-monomers", "ligand-induced", "protein-induced"),
+    "apo-monomers": ("apo-monomers", "intrinsic", "ligand-induced", "protein-induced"),
+    "ligand-induced": ("ligand-induced",),
+    "protein-induced": ("protein-induced",),
+}
+
+
+@functools.lru_cache(maxsize=8)
+def _load_chain_mapping_json_cached(path_str: str) -> Dict[str, Any]:
+    """Read & cache an AF3/Boltz chain-mapping JSON (>1MB each).
+
+    Without caching every prediction-method/cluster lookup re-parses the
+    file, which dwarfs the rest of ``make_pairs`` enrichment.
+    """
+    if not path_str:
+        return {}
+    p = Path(path_str)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"  Warning: failed to read chain-mapping JSON {p}: {e}")
+        return {}
+
+
 def get_chain_mapping(
     cluster_id: str, yaml_tag: str, method_type: str, mapping_json_path: str
 ) -> Optional[Dict]:
     """
     Get modeled→target chain mapping from a JSON file (AF3 or Boltz layout).
-    Key shape: ``"{set_name}/{cluster_id}/{yaml_tag}"`` (same as the map set key).
+
+    JSON key shape: ``"{set_name}/{cluster_id}/{yaml_tag}"``. Each entry must
+    expose a ``"mapping"`` field mapping *output* (modeled) chain IDs to
+    *target* (reference PDB) chain IDs. This function returns the reverse
+    direction, ``{target_chain: output_chain}``, which is what callers want
+    when they have an *interested* (target) chain from the yaml tag and need
+    to know what chain to look up in the modeled CIF.
+
+    The intrinsic-dynamics set is stored under ``apo-monomers`` in the
+    chain-mapping JSONs even when the rest of the pipeline labels it
+    ``intrinsic`` — :data:`_CHAIN_MAPPING_SET_ALIASES` lets either spelling
+    resolve.
     """
     if not mapping_json_path:
         return None
-    mapping_path = Path(mapping_json_path)
-    if not mapping_path.exists():
+    all_mappings = _load_chain_mapping_json_cached(str(mapping_json_path))
+    if not all_mappings:
         return None
-    key = f"{(method_type or '').strip()}/{cluster_id}/{yaml_tag}"
-    with open(mapping_path, "r") as f:
-        all_mappings = json.load(f)
-    if key not in all_mappings:
-        return None
-    modeled = all_mappings[key]["mapping"]
-    return {v: k for k, v in modeled.items()}
+    set_key = (method_type or "").strip()
+    aliases = _CHAIN_MAPPING_SET_ALIASES.get(set_key, (set_key,))
+    for st in aliases:
+        entry = all_mappings.get(f"{st}/{cluster_id}/{yaml_tag}")
+        if not isinstance(entry, dict):
+            continue
+        modeled = entry.get("mapping")
+        if isinstance(modeled, dict) and modeled:
+            return {v: k for k, v in modeled.items()}
+    return None
 
 
 def get_msa_path(cluster_id: str) -> str:
