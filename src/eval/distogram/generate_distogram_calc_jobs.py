@@ -3,7 +3,7 @@
 Generate sbatch jobs for parallel distogram loss calculation.
 
 Usage:
-    python -m eval.distogram.generate_distogram_calc_jobs --tasks …/distogram_tasks.json …
+    python -m eval.distogram.generate_distogram_calc_jobs --tasks .../distogram_tasks.json ...
 """
 
 from __future__ import annotations
@@ -38,10 +38,10 @@ def generate_sbatch_script(
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=1
 
-export PYTHONPATH="{_REPO_ROOT}/src"
 cd "{_REPO_ROOT}"
 
-python -m eval.distogram.calc_distogram_loss \\
+uv run --project "{_REPO_ROOT}" \\
+    python -m eval.distogram.calc_distogram_loss \\
     --tasks {tasks_json} \\
     --rep-seq {rep_seq} \\
     --msa-dir {msa_dir} \\

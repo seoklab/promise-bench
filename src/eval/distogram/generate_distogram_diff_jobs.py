@@ -40,10 +40,10 @@ def generate_sbatch_script(
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=2
 
-export PYTHONPATH="{_REPO_ROOT}/src"
 cd "{_REPO_ROOT}"
 
-python -m eval.distogram.calc_reference_distogram_diff \\
+uv run --project "{_REPO_ROOT}" \\
+    python -m eval.distogram.calc_reference_distogram_diff \\
     --tasks {tasks_json} \\
     --rep-seq {rep_seq} \\
     --msa-dir {msa_dir} \\
