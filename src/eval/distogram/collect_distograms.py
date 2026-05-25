@@ -11,12 +11,13 @@ Output structure:
 
 Usage (``PYTHONPATH=src``)::
 
-    python -m eval.distogram.collect_distograms --json …/seq_cluster_to_answer_map_with_cb.json --method boltz --output-dir data_eval/distogram
-    python -m eval.distogram.collect_distograms --json … --method af3 --output-dir data_eval/distogram
-    python -m eval.distogram.collect_distograms --json … --all --output-dir data_eval/distogram
+    python -m eval.distogram.collect_distograms --json .../seq_cluster_to_answer_map_with_cb.json --method boltz --output-dir data_eval/distogram
+    python -m eval.distogram.collect_distograms --json ... --method af3 --output-dir data_eval/distogram
+    python -m eval.distogram.collect_distograms --json ... --all --output-dir data_eval/distogram
 """
 
 import argparse
+import functools
 from pathlib import Path
 import re
 import json
@@ -24,9 +25,48 @@ import gzip
 import gemmi
 import numpy as np
 import glob
-from typing import Optional, Iterable
+from typing import Dict, Iterable, Optional, Tuple
 
 from utils._config import eval_cfg as E
+from utils._config import pipeline_cfg as P
+
+
+def _structure_npz_candidates_from_config(
+    method: str, method_type: str, cluster_id: str, yaml_tag: str
+) -> list[Path]:
+    """Expand ``pipeline.distogram_enrich.structure_npz.<method>`` templates."""
+    templates = P.distogram_enrich_structure_templates(method)
+    return _expand_companion_templates(
+        templates, method_type=method_type, cluster_id=cluster_id, yaml_tag=yaml_tag
+    )
+
+
+def _confidences_json_candidates_from_config(
+    method: str, method_type: str, cluster_id: str, yaml_tag: str
+) -> list[Path]:
+    """Expand ``pipeline.distogram_enrich.confidences_json.<method>`` templates."""
+    templates = P.distogram_enrich_confidences_templates(method)
+    return _expand_companion_templates(
+        templates, method_type=method_type, cluster_id=cluster_id, yaml_tag=yaml_tag
+    )
+
+
+def _expand_companion_templates(
+    templates: list[str], *, method_type: str, cluster_id: str, yaml_tag: str
+) -> list[Path]:
+    if not templates:
+        return []
+    seen: set[str] = set()
+    hits: list[Path] = []
+    for tmpl in templates:
+        expanded = tmpl.format(
+            method_type=method_type, cluster_id=cluster_id, yaml_tag=yaml_tag
+        )
+        for m in glob.glob(expanded):
+            if m not in seen:
+                seen.add(m)
+                hits.append(Path(m))
+    return hits
 
 
 def load_patterns_from_distogram_json(json_path: Path) -> list[str]:
@@ -53,30 +93,41 @@ def load_patterns_from_distogram_json(json_path: Path) -> list[str]:
     return sorted(patterns)
 
 
-def find_distogram_files_from_patterns(patterns: list[str], method_filter: Optional[str] = None) -> list[Path]:
+# Method-name tokens accepted in distogram pattern strings (dash/underscore variants).
+_METHOD_TOKENS: dict[str, tuple[str, ...]] = {
+    "boltz1": ("boltz1", "boltz-1", "boltz_1"),
+    "boltz2": ("boltz2", "boltz-2", "boltz_2"),
+    "af3": ("af3",),
+    "bioemu": ("bioemu",),
+}
+
+
+def _pattern_matches_method(pat: str, method: str) -> bool:
+    """True iff ``pat`` unambiguously identifies ``method`` (boltz1/boltz2 must not collide)."""
+    p = pat.lower()
+    aliases = _METHOD_TOKENS.get(method, (method.lower(),))
+    if not any(tok in p for tok in aliases):
+        return False
+    if method == "boltz1" and any(tok in p for tok in _METHOD_TOKENS["boltz2"]):
+        return False
+    if method == "boltz2" and any(tok in p for tok in _METHOD_TOKENS["boltz1"]):
+        return False
+    return True
+
+
+def find_distogram_files_from_patterns(
+    patterns: list[str],
+    method_filter: Optional[str] = None,
+    suffixes: tuple[str, ...] = (".npz",),
+) -> list[Path]:
+    """Expand each glob in ``patterns`` and keep files whose suffix is in ``suffixes``."""
     files = []
     for pat in patterns:
-        if method_filter:
-            # For boltz1: must contain "boltz1"
-            if method_filter == "boltz1":
-                if "boltz1" not in pat.lower():
-                    continue
-            # For boltz2: must contain "boltz" but NOT "boltz1"
-            elif method_filter == "boltz2":
-                if "boltz" not in pat.lower() or "boltz1" in pat.lower():
-                    continue
-            # For af3: must contain "af3"
-            elif method_filter == "af3":
-                if "af3" not in pat.lower():
-                    continue
-            # Generic filter
-            else:
-                if method_filter.lower() not in pat.lower():
-                    continue
-        matched = glob.glob(pat)
-        for m in matched:
+        if method_filter and not _pattern_matches_method(pat, method_filter):
+            continue
+        for m in glob.glob(pat):
             p = Path(m)
-            if p.is_file() and p.suffix == ".npz":
+            if p.is_file() and p.suffix in suffixes:
                 files.append(p)
     return files
 
@@ -267,84 +318,100 @@ def extract_chain_seq_mapping_from_boltz_npz(
     return result
 
 
-def get_af3_chain_mapping_file(
+# ``intrinsic`` (pipeline) <-> ``apo-monomers`` (legacy JSON) alias table.
+_AF3_METHOD_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
+    "intrinsic": ("intrinsic", "apo-monomers", "ligand-induced", "protein-induced"),
+    "ligand-induced": ("ligand-induced", "intrinsic", "apo-monomers", "protein-induced"),
+    "protein-induced": ("protein-induced", "intrinsic", "apo-monomers", "ligand-induced"),
+}
+
+
+@functools.lru_cache(maxsize=8)
+def _load_af3_chain_mapping_json(path_str: str) -> dict:
+    """Load + cache the consolidated AF3 chain-mapping JSON.
+
+    Flat JSON keyed by ``"{method_type}/{cluster_id}/{yaml_tag}"``; each
+    entry has a ``"mapping"`` field of ``{cif_chain_id: target_chain_id}``.
+    """
+    p = Path(path_str)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"  Failed to load AF3 chain mapping JSON {p}: {e}")
+        return {}
+
+
+def _candidate_af3_keys(method_type: str, cluster_id: str, yaml_tag: str) -> list[str]:
+    """JSON keys to probe; handles method-type aliasing and ``_m`` <-> ``_x`` toggle."""
+    method_aliases = _AF3_METHOD_TYPE_ALIASES.get(method_type, (method_type,))
+    yaml_variants = [yaml_tag]
+    if yaml_tag.endswith("_x"):
+        yaml_variants.append(yaml_tag[:-2] + "_m")
+    elif yaml_tag.endswith("_m"):
+        yaml_variants.append(yaml_tag[:-2] + "_x")
+    keys: list[str] = []
+    seen: set[str] = set()
+    for mt in method_aliases:
+        for yt in yaml_variants:
+            k = f"{mt}/{cluster_id}/{yt}"
+            if k not in seen:
+                seen.add(k)
+                keys.append(k)
+    return keys
+
+
+def lookup_af3_cif_to_target(
+    mapping_root: Optional[Path],
     cluster_id: str,
     yaml_tag: str,
     method_type: str,
-    mapping_root: Optional[Path],
-) -> Optional[Path]:
-    """
-    Get path to AF3 chain mapping JSON file under ``mapping_root`` (…/AF3 layout).
+) -> Optional[dict]:
+    """Return ``{cif_chain_id: target_chain_id}`` for one task.
+
+    ``None`` if the JSON or the key is missing; ``{}`` if the entry exists
+    but has no ``mapping`` field.
     """
     if mapping_root is None:
         return None
-
-    base_path = mapping_root
-
-    mapping_path = base_path / method_type / cluster_id / f"{yaml_tag}.json"
-    if mapping_path.exists():
-        return mapping_path
-    
-    # Try with _m instead of _x
-    mapping_path = base_path / method_type / cluster_id / f"{yaml_tag.replace('_x', '_m')}.json"
-    if mapping_path.exists():
-        return mapping_path
-    
-    # Try other method types as fallback
-    for alt_type in ["ligand-induced", "protein-induced", "apo-monomers"]:
-        if alt_type != method_type:
-            mapping_path = base_path / alt_type / cluster_id / f"{yaml_tag}.json"
-            if mapping_path.exists():
-                return mapping_path
-    
+    data = _load_af3_chain_mapping_json(str(mapping_root))
+    if not data:
+        return None
+    for key in _candidate_af3_keys(method_type, cluster_id, yaml_tag):
+        entry = data.get(key)
+        if isinstance(entry, dict):
+            mapping = entry.get("mapping")
+            if isinstance(mapping, dict) and mapping:
+                return {str(k): str(v) for k, v in mapping.items()}
+            return {}
     return None
 
 
 def extract_af3_chain_mapping(
-    confidences_path: Path, 
-    chain_mapping_path: Path,
-    distogram_path: Optional[Path] = None
+    confidences_path: Path,
+    cif_to_target: dict,
+    distogram_path: Optional[Path] = None,
 ) -> dict:
-    """
-    Extract chain to distogram index mapping from AF3 confidences.json.
-    
-    Uses chain_mapping.json to map target_chain_id (e.g., A1, B1) to 
-    cif_chain_id (e.g., A, B) used in confidences.json.
-
-    Logic:
-    - If a chain has all same res_ids (e.g., all 1), it's a ligand (atom-level tokens)
-    - If a chain has multiple different res_ids, it's a polymer (residue-level tokens)
+    """Extract chain -> distogram-index mapping from AF3 confidences.json.
 
     Args:
-        confidences_path: Path to confidences.json
-        chain_mapping_path: Path to chain_mapping.json (target_chain_id -> cif_chain_id)
-        distogram_path: Optional path to distogram npz to verify size
+        confidences_path: Path to confidences.json.
+        cif_to_target: Resolved ``{cif_chain_id: target_chain_id}`` mapping.
+        distogram_path: Optional distogram npz for size verification.
 
-    Returns:
-        Same format as Boltz chain mapping (but without residue/atom names)
-        Keys are target_chain_id (e.g., A1, B1)
+    A chain whose ``res_ids`` are all identical is treated as a ligand
+    (atom-level tokens); otherwise it's a polymer (residue-level tokens).
+
+    Returns Boltz-compatible structure: ``"chains"`` keyed by cif_chain_id
+    plus ``"cif_to_target_chain"`` carrying the supplied mapping.
     """
     if not confidences_path.exists():
         return {}
-    
-    if not chain_mapping_path or not chain_mapping_path.exists():
-        return {}
 
-    # Load chain mapping (target_chain_id -> cif_chain_id)
-    try:
-        with open(chain_mapping_path, "r") as f:
-            mapping_data = json.load(f)
-    except Exception as e:
-        print(f"  Failed to load chain_mapping.json: {e}")
+    if cif_to_target is None:
         return {}
-    
-    # Build cif_chain_id -> target_chain_id mapping
-    cif_to_target = {}
-    for entry in mapping_data.get("chain_mappings", []):
-        target_id = entry.get("target_chain_id")
-        cif_id = entry.get("cif_chain_id")
-        if target_id and cif_id:
-            cif_to_target[cif_id] = target_id
 
     try:
         with open(confidences_path, "r") as f:
@@ -666,26 +733,25 @@ def collect_boltz_distograms(output_base: Path, force: bool = False, patterns: l
         if dir_key not in processed_dirs and (force or not mapping_file.exists()):
             processed_dirs.add(dir_key)
 
-            # Find corresponding processed npz file
-            # Path: boltz/{set}/{cluster}/{yaml}/seed_{i}/boltz_results_{...}/processed/structures/{yaml}.npz
-            distogram_dir = npz.parent  # predictions/{...}/
-            boltz_results_dir = distogram_dir.parent.parent  # boltz_results_{...}/
-            # Try various processed npz locations
-            processed_candidates = [
-                boltz_results_dir / "processed" / "structures" / f"{yaml_stem}.npz",
-                boltz_results_dir / "processed" / "structures" / f"{yaml_stem}_with_msa.npz",
-                boltz_results_dir / "processed" / "structures" / f"{yaml_stem}_rerun_with_msa.npz",
-            ]
+            # Locate Boltz processed NPZ via config templates (no fallback;
+            # run ``link_boltz_structure_npz.py`` if missing).
+            config_candidates = _structure_npz_candidates_from_config(
+                boltz1_or_2, set_name, cluster, yaml_stem
+            )
             processed_npz = None
-            for cand in processed_candidates:
+            for cand in config_candidates:
                 if cand.exists():
                     processed_npz = cand
                     break
 
             if processed_npz is None:
-                msg = f"Processed NPZ not found for {yaml_stem} under {boltz_results_dir}"
+                msg = (
+                    f"Processed NPZ not found for {yaml_stem} "
+                    f"(method={boltz1_or_2}, set={set_name}, cluster={cluster}); "
+                    f"checked pipeline.distogram_enrich.structure_npz.{boltz1_or_2} templates"
+                )
                 print(f"  Warning: {msg}")
-                errors.append({"type": "MissingProcessedNPZ", "yaml_stem": yaml_stem, "expected_dir": str(boltz_results_dir), "distogram": str(npz)})
+                errors.append({"type": "MissingProcessedNPZ", "yaml_stem": yaml_stem, "method": boltz1_or_2, "method_type": set_name, "cluster": cluster, "distogram": str(npz)})
             else:
                 try:
                     chain_mapping = extract_chain_seq_mapping_from_boltz_npz(processed_npz, npz)
@@ -811,40 +877,49 @@ def collect_af3_distograms(
         if dir_key not in processed_dirs and (force or not mapping_file.exists()):
             processed_dirs.add(dir_key)
 
-            # Find corresponding confidences.json (same directory as distogram.npz)
-            conf_file = npz.parent / f"{cluster.lower()}_{yaml_stem.lower()}_confidences.json"
-            if not conf_file.exists():
-                conf_file = npz.parent / f"{yaml_stem.lower()}_confidences.json"
-            if not conf_file.exists():
-                conf_file = npz.parent / f"{cluster.lower()}_{yaml_stem.lower().replace('_m', '_x')}_confidences.json"
-            # Get chain_mapping.json path
-            chain_mapping_path = get_af3_chain_mapping_file(
-                cluster, yaml_stem, set_name, af3_chain_mapping_root
+            # Locate AF3 confidences.json via config templates (no fallback;
+            # run ``link_boltz_structure_npz.py --skip-boltz`` if missing).
+            conf_file: Optional[Path] = None
+            for cand in _confidences_json_candidates_from_config(
+                "af3", set_name, cluster, yaml_stem
+            ):
+                if cand.exists():
+                    conf_file = cand
+                    break
+            # Resolve cif -> target chain mapping from the consolidated JSON.
+            cif_to_target = lookup_af3_cif_to_target(
+                af3_chain_mapping_root, cluster, yaml_stem, set_name
             )
-            
-            if conf_file.exists():
-                if chain_mapping_path is None:
-                    msg = f"AF3 chain_mapping.json not found for {cluster}/{yaml_stem} (method_type={set_name})"
-                    print(f"  Warning: {msg}")
-                    errors.append({"type": "MissingAF3ChainMappingFile", "cluster": cluster, "yaml_stem": yaml_stem, "method_type": set_name, "distogram": str(npz)})
-                else:
-                    try:
-                        chain_mapping = extract_af3_chain_mapping(conf_file, chain_mapping_path, npz)
-                        if chain_mapping:
-                            with open(mapping_file, "w") as f:
-                                json.dump(chain_mapping, f, indent=2)
-                            mappings_created += 1
-                        else:
-                            msg = f"Empty AF3 chain mapping from {conf_file}"
-                            print(f"  Warning: {msg}")
-                            errors.append({"type": "EmptyAF3ChainMapping", "conf_file": str(conf_file), "chain_mapping_path": str(chain_mapping_path), "distogram": str(npz)})
-                    except Exception as e:
-                        print(f"  Warning: Failed to extract chain mapping from {conf_file}: {e}")
-                        errors.append({"type": "AF3ChainMappingError", "conf_file": str(conf_file), "chain_mapping_path": str(chain_mapping_path), "distogram": str(npz), "message": str(e)})
-            else:
-                msg = f"confidences.json not found for {npz.parent}"
+
+            if conf_file is None:
+                msg = (
+                    f"confidences.json not found for {cluster}/{yaml_stem} "
+                    f"(method_type={set_name}); checked "
+                    f"pipeline.distogram_enrich.confidences_json.af3 templates"
+                )
                 print(f"  Warning: {msg}")
-                errors.append({"type": "MissingConfFile", "conf_file": str(conf_file), "distogram": str(npz)})
+                errors.append({"type": "MissingConfFile", "cluster": cluster, "yaml_stem": yaml_stem, "method_type": set_name, "distogram": str(npz)})
+            elif cif_to_target is None:
+                msg = (
+                    f"AF3 chain mapping entry not found for {cluster}/{yaml_stem} "
+                    f"(method_type={set_name}) in {af3_chain_mapping_root}"
+                )
+                print(f"  Warning: {msg}")
+                errors.append({"type": "MissingAF3ChainMappingEntry", "cluster": cluster, "yaml_stem": yaml_stem, "method_type": set_name, "mapping_root": str(af3_chain_mapping_root), "distogram": str(npz)})
+            else:
+                try:
+                    chain_mapping = extract_af3_chain_mapping(conf_file, cif_to_target, npz)
+                    if chain_mapping:
+                        with open(mapping_file, "w") as f:
+                            json.dump(chain_mapping, f, indent=2)
+                        mappings_created += 1
+                    else:
+                        msg = f"Empty AF3 chain mapping from {conf_file}"
+                        print(f"  Warning: {msg}")
+                        errors.append({"type": "EmptyAF3ChainMapping", "conf_file": str(conf_file), "mapping_root": str(af3_chain_mapping_root), "distogram": str(npz)})
+                except Exception as e:
+                    print(f"  Warning: Failed to extract chain mapping from {conf_file}: {e}")
+                    errors.append({"type": "AF3ChainMappingError", "conf_file": str(conf_file), "mapping_root": str(af3_chain_mapping_root), "distogram": str(npz), "message": str(e)})
 
     print(
         f"af3: Created {created} symlinks, skipped {skipped} existing, {mappings_created} chain mappings"
@@ -887,23 +962,23 @@ def collect_bioemu_distograms(output_base: Path, force: bool = False, patterns: 
     if not patterns:
         print("No patterns provided for bioemu")
         return 0, []
-    
-    # Filter bioemu patterns
-    bioemu_patterns = [pat for pat in patterns if "bioemu" in pat.lower()]
-    
-    total_files = len(bioemu_patterns)
-    print(f"bioemu: Found {total_files} patterns")
-    
-    for i, pattern in enumerate(bioemu_patterns):
+
+    # Patterns from make_pairs are globs -- expand them to real ``.pickle`` files.
+    all_pickle_files = find_distogram_files_from_patterns(
+        patterns, method_filter="bioemu", suffixes=(".pickle",)
+    )
+    total_files = len(all_pickle_files)
+    bioemu_pattern_count = sum(1 for pat in patterns if "bioemu" in pat.lower())
+    print(
+        f"bioemu: Found {total_files} distogram files "
+        f"from {bioemu_pattern_count} patterns"
+    )
+
+    for i, pickle_path in enumerate(all_pickle_files):
         # Progress log every 100 files
         if (i + 1) % 100 == 0 or i == 0:
             print(f"  [{i + 1}/{total_files}] Processing...")
-        
-        pickle_path = Path(pattern)
-        if not pickle_path.exists():
-            print(f"  Warning: Pattern file does not exist: {pattern}")
-            continue
-        
+
         # Parse path: .../bioemu_disto/{cluster_id}/colabfold/{cluster_id}_all_rank_*_alphafold2_model_*_seed_*.pickle
         parts = pickle_path.parts
         
@@ -1045,6 +1120,26 @@ def collect_bioemu_distograms(output_base: Path, force: bool = False, patterns: 
 
 
 
+# Answer-map -> on-disk name translation for ``generate_distogram_tasks``.
+# Answer-map uses dashed methods (``boltz-1``); on-disk tree uses dash-less.
+_DISTOGRAM_METHODS: Tuple[str, ...] = ("af3", "boltz-1", "boltz-2", "bioemu")
+_DASH_TO_DISK_METHOD: Dict[str, str] = {"boltz-1": "boltz1", "boltz-2": "boltz2"}
+# bioemu-only set alias: pipeline ``intrinsic`` -> on-disk ``apo-monomers``.
+_BIOEMU_SET_ALIASES: Dict[str, str] = {"intrinsic": "apo-monomers"}
+
+
+def _disk_method(method: str) -> str:
+    """Translate answer-map method key -> on-disk directory name."""
+    return _DASH_TO_DISK_METHOD.get(method, method)
+
+
+def _disk_set(method: str, set_name: str) -> str:
+    """Translate answer-map set key -> on-disk directory name (bioemu only)."""
+    if method == "bioemu":
+        return _BIOEMU_SET_ALIASES.get(set_name, set_name)
+    return set_name
+
+
 def generate_distogram_tasks(
     distogram_json: Path,
     output_base: Path,
@@ -1099,7 +1194,7 @@ def generate_distogram_tasks(
             # Process apo predictions
             if "apo_predictions" in cluster_data:
                 for method, method_info in cluster_data["apo_predictions"].items():
-                    if method not in ["boltz2", "boltz1", "af3", "bioemu"]:
+                    if method not in _DISTOGRAM_METHODS:
                         continue
                     if method_filter and method != method_filter:
                         continue
@@ -1107,34 +1202,37 @@ def generate_distogram_tasks(
                     if not yaml_tag and method != "bioemu":
                         continue
 
-                    # Find all distogram files for this yaml_tag
+                    # Answer-map keys -> on-disk path segments.
+                    disk_m = _disk_method(method)
+                    disk_s = _disk_set(method, method_type)
+
                     # Pattern: {output_base}/{method}/{set}/{cluster}/{yaml}/seed_*.npz
                     distogram_pattern = (
-                        output_base / method / method_type / cluster_id / yaml_tag / "seed_*.npz"
+                        output_base / disk_m / disk_s / cluster_id / yaml_tag / "seed_*.npz"
                     )
                     if method == "bioemu":
                         distogram_pattern = (
-                            output_base / method / method_type / cluster_id / "seed_*.npz"
+                            output_base / disk_m / disk_s / cluster_id / "seed_*.npz"
                         )
                     distogram_files = sorted(glob.glob(str(distogram_pattern)))
                     chain_mapping_pattern = (
-                        output_base / method / method_type / cluster_id / yaml_tag / "chain_seq_mapping.json"
+                        output_base / disk_m / disk_s / cluster_id / yaml_tag / "chain_seq_mapping.json"
                     )
                     if method == "bioemu":
                         chain_mapping_pattern = (
-                            output_base / method / method_type / cluster_id / "chain_seq_mapping.json"
+                            output_base / disk_m / disk_s / cluster_id / "chain_seq_mapping.json"
                         )
                     method_type_ori = method_type
                     if not distogram_files and method_type_ori == "apo-monomers":
-                        distogram_pattern = output_base / method / "protein-induced" / cluster_id / yaml_tag / "seed_*.npz"
+                        distogram_pattern = output_base / disk_m / "protein-induced" / cluster_id / yaml_tag / "seed_*.npz"
                         distogram_files = sorted(glob.glob(str(distogram_pattern)))
-                        chain_mapping_pattern = output_base / method / "protein-induced" / cluster_id / yaml_tag / "chain_seq_mapping.json"
+                        chain_mapping_pattern = output_base / disk_m / "protein-induced" / cluster_id / yaml_tag / "chain_seq_mapping.json"
                     if not distogram_files and method_type_ori == "apo-monomers":
-                        distogram_pattern = output_base / method / "ligand-induced" / cluster_id / yaml_tag / "seed_*.npz"
+                        distogram_pattern = output_base / disk_m / "ligand-induced" / cluster_id / yaml_tag / "seed_*.npz"
                         distogram_files = sorted(glob.glob(str(distogram_pattern)))
-                        chain_mapping_pattern = output_base / method / "ligand-induced" / cluster_id / yaml_tag / "chain_seq_mapping.json"
+                        chain_mapping_pattern = output_base / disk_m / "ligand-induced" / cluster_id / yaml_tag / "chain_seq_mapping.json"
                     if not distogram_files:
-                        print(f"    No distogram files found for {output_base}/{method}/{method_type_ori}/{cluster_id}/{yaml_tag}")
+                        print(f"    No distogram files found for {output_base}/{disk_m}/{disk_s}/{cluster_id}/{yaml_tag}")
                         continue
 
                     chain_mapping_files = list(glob.glob(str(chain_mapping_pattern)))
@@ -1169,15 +1267,8 @@ def generate_distogram_tasks(
                             return "conf_x"
                         return "unknown"
 
-                    # Convert method to prediction_method name
-                    if method == "boltz2":
-                        prediction_method = "boltz2"
-                    elif method == "boltz1":
-                        prediction_method = "boltz1"
-                    elif method == "chai":
-                        prediction_method = "chai-1"
-                    else:
-                        prediction_method = method
+                    # Dash-less on-disk label for downstream consumers.
+                    prediction_method = _disk_method(method)
 
                     for ref_yaml_tag, ref_info in all_references.items():
                         # Reference state
@@ -1233,7 +1324,7 @@ def generate_distogram_tasks(
             if "holo_predictions" in cluster_data:
                 for conformation, conformation_data in cluster_data["holo_predictions"].items():
                     for method, method_info in conformation_data.items():
-                        if method not in ["boltz2", "boltz1", "af3", "bioemu"]:
+                        if method not in _DISTOGRAM_METHODS:
                             continue
                         if method_filter and method != method_filter:
                             continue
@@ -1241,19 +1332,23 @@ def generate_distogram_tasks(
                         if not yaml_tag:
                             continue
 
+                        # Answer-map keys -> on-disk segments (see apo branch).
+                        disk_m = _disk_method(method)
+                        disk_s = _disk_set(method, method_type)
+
                         # Find all distogram files for this yaml_tag
                         distogram_pattern = (
-                            output_base / method / method_type / cluster_id / yaml_tag / "seed_*.npz"
+                            output_base / disk_m / disk_s / cluster_id / yaml_tag / "seed_*.npz"
                         )
 
 
                         distogram_files = list(glob.glob(str(distogram_pattern)))
 
                         if not distogram_files:
-                            print(f"    No distogram files found for {method}/{yaml_tag}")
+                            print(f"    No distogram files found for {disk_m}/{disk_s}/{cluster_id}/{yaml_tag}")
                             continue
                         distogram_chain_mapping_pattern = (
-                                                        output_base / method / method_type / cluster_id / yaml_tag / "chain_seq_mapping.json"
+                                                        output_base / disk_m / disk_s / cluster_id / yaml_tag / "chain_seq_mapping.json"
                         )
                         chain_mapping_files = list(glob.glob(str(distogram_chain_mapping_pattern)))
                         assert len(chain_mapping_files) == 1, f"Multiple chain_seq_mapping.json files found for {distogram_chain_mapping_pattern}"
@@ -1307,14 +1402,7 @@ def generate_distogram_tasks(
                                 except Exception:
                                     mobile_cif_path = ""
 
-                            if method == "boltz2":
-                                prediction_method = "boltz2"
-                            elif method == "boltz1":
-                                prediction_method = "boltz1"
-                            elif method == "chai":
-                                prediction_method = "chai-1"
-                            else:
-                                prediction_method = method
+                            prediction_method = _disk_method(method)
 
                             mobile_chain = method_info.get("target_chain", "")
                             ref_chain = ref_info.get("target_chain", "")
@@ -1442,7 +1530,9 @@ def main():
         "--af3-chain-mapping-root",
         type=str,
         default=None,
-        help="Directory whose layout matches …/AF3/{method_type}/{cluster}/{yaml}.json. "
+        help="Path to the consolidated AF3 chain-mapping JSON "
+        "(flat dict keyed by '{method_type}/{cluster_id}/{yaml_tag}', value "
+        "carries a 'mapping' field of the form {cif_id: target_id}). "
         "For AF3/--all: pass this or set eval.external.af3_chain_mapping_root.",
     )
     parser.add_argument(

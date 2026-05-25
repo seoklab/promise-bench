@@ -136,6 +136,36 @@ class PipelineConfig(SectionConfig):
         cfg = self._cfg()
         return {cfg["dirs"][k] for k in cfg["intermediate"]}
 
+    def distogram_enrich_confidences_templates(self, method: str) -> list[str]:
+        """Glob templates for the AF3 ``confidences.json``.
+
+        Reads ``pipeline.distogram_enrich.confidences_json.<method>``.
+        Placeholders: ``{method_type}``, ``{cluster_id}``, ``{yaml_tag}``.
+        """
+        de = self._cfg().get("distogram_enrich", {}) or {}
+        conf = de.get("confidences_json") or {}
+        raw = conf.get(method)
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        return [str(t) for t in raw]
+
+    def distogram_enrich_structure_templates(self, method: str) -> list[str]:
+        """Glob templates for the Boltz structure NPZ.
+
+        Reads ``pipeline.distogram_enrich.structure_npz.<method>``.
+        Placeholders: ``{method_type}``, ``{cluster_id}``, ``{yaml_tag}``.
+        """
+        de = self._cfg().get("distogram_enrich", {}) or {}
+        struct = de.get("structure_npz") or {}
+        raw = struct.get(method)
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        return [str(t) for t in raw]
+
 
 # =====================================================================
 # Eval accessor
