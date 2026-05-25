@@ -87,19 +87,18 @@ def parse_modeled_key(modeled_key: str, mobile_cif: Optional[str] = None) -> Tup
         if model_match:
             model_num = int(model_match.group(1))
 
-    if mobile_cif and (seed_num == -1 or model_num == -1):
+    if mobile_cif:
         if seed_num == -1:
             seed_match_cif = re.search(r"/seed_(\d+)/", mobile_cif)
             if seed_match_cif:
                 seed_num = int(seed_match_cif.group(1))
-        if model_num == -1:
+        sample_match = re.search(r"sample[-_](\d+)", mobile_cif)
+        if sample_match:
+            model_num = int(sample_match.group(1))
+        elif model_num == -1:
             model_match_cif = re.search(r"_model_(\d+)\.(cif|pdb)$", mobile_cif)
             if model_match_cif:
                 model_num = int(model_match_cif.group(1))
-            else:
-                sample_match = re.search(r"sample-(\d+)", mobile_cif)
-                if sample_match:
-                    model_num = int(sample_match.group(1))
     return seed_num, model_num
 
 
