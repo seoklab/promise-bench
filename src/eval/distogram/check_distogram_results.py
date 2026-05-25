@@ -2,13 +2,15 @@
 """
 Check progress of distogram calculation tasks.
 
-The output file is 'distogram_loss_final.json' in the prediction_distograms directory.
-E.g., distogram/af3/apo-monomers/8ABP_1/2wrz_2_B1_m/distogram_loss_final.json
+The output file written by ``calc_distogram_loss`` is
+``distogram_loss_final.json`` (next to the prediction distograms), e.g.:
+
+    distogram/af3/apo-monomers/8ABP_1/2wrz_2_B1_m/distogram_loss_final.json
 
 Usage (``PYTHONPATH=src``)::
 
     python -m eval.distogram.check_distogram_results --tasks data_eval/distogram/distogram_tasks.json
-    python -m eval.distogram.check_distogram_results --tasks …/distogram_tasks.json --verbose
+    python -m eval.distogram.check_distogram_results --tasks .../distogram_tasks.json --verbose
 """
 
 from __future__ import annotations
@@ -24,8 +26,12 @@ from eval.distogram.path_utils import (
 )
 
 
+# Result filename written by ``calc_distogram_loss``; keep in sync.
+RESULT_FILE_NAME = "distogram_loss_final.json"
+
+
 def get_output_dir(task: dict) -> Path:
-    """Get the output directory for distogram_loss_final.json from task."""
+    """Prediction-distogram directory holding ``distogram_loss_final.json``."""
     prediction_distograms = task.get("prediction_distograms", [])
     if prediction_distograms:
         # Output is in the same directory as the prediction distograms
@@ -140,7 +146,7 @@ def check_distogram_results(
             missing.append((i, task, None))
             continue
 
-        result_file = output_dir / "distogram_loss_real_final.json"
+        result_file = output_dir / RESULT_FILE_NAME
 
         if not result_file.exists():
             missing.append((i, task, output_dir))
@@ -226,19 +232,19 @@ def check_distogram_results(
     print(f"{'=' * 60}")
     print(f"Total tasks: {total_tasks}")
     print(
-        f"  ✓ Complete:            {len(success)} ({len(success) / total_tasks * 100:.1f}%)"
+        f"  [OK] Complete:            {len(success)} ({len(success) / total_tasks * 100:.1f}%)"
     )
     print(
-        f"  △ Incomplete refs:     {len(incomplete_refs)} ({len(incomplete_refs) / total_tasks * 100:.1f}%)"
+        f"  [~] Incomplete refs:     {len(incomplete_refs)} ({len(incomplete_refs) / total_tasks * 100:.1f}%)"
     )
     print(
-        f"  △ Incomplete pairs:    {len(incomplete_pairs)} ({len(incomplete_pairs) / total_tasks * 100:.1f}%)"
+        f"  [~] Incomplete pairs:    {len(incomplete_pairs)} ({len(incomplete_pairs) / total_tasks * 100:.1f}%)"
     )
     print(
-        f"  ✗ Missing:             {len(missing)} ({len(missing) / total_tasks * 100:.1f}%)"
+        f"  [X] Missing:             {len(missing)} ({len(missing) / total_tasks * 100:.1f}%)"
     )
     print(
-        f"  ○ Empty:               {len(empty)} ({len(empty) / total_tasks * 100:.1f}%)"
+        f"  [ ] Empty:               {len(empty)} ({len(empty) / total_tasks * 100:.1f}%)"
     )
     print(f"{'=' * 60}")
 
@@ -363,7 +369,7 @@ def analyze_by_method(tasks_json: Path):
             stats[key]["missing"] += 1
             continue
 
-        result_file = output_dir / "distogram_loss_final.json"
+        result_file = output_dir / RESULT_FILE_NAME
         if not result_file.exists():
             stats[key]["missing"] += 1
         else:
@@ -449,11 +455,11 @@ def main():
     total_incomplete = missing + empty + incomplete_refs + incomplete_pairs
     if total_incomplete == 0:
         print(
-            "\n✓ All distogram calculations completed successfully with all references and dynamic pairs!"
+            "\n[OK] All distogram calculations completed successfully with all references and dynamic pairs!"
         )
         return 0
     else:
-        print(f"\n⚠ {total_incomplete} tasks still need to be processed or fixed")
+        print(f"\n[!] {total_incomplete} tasks still need to be processed or fixed")
         return 1
 
 

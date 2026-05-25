@@ -11,7 +11,7 @@ Inputs
 - ``valid_pairs.json``: by set type (apo-monomers / ligand-induced / protein-induced).
 - ``distogram_tasks.json``: produced by ``collect_distograms`` (and used by loss/diff steps).
 - ``reference_distogram_diff.json`` tree: produced by ``calc_reference_distogram_diff``.
-- Per-prediction distogram loss JSON: ``distogram_loss_real_final.json`` written next to
+- Per-prediction distogram loss JSON: ``distogram_loss_final.json`` written next to
   each prediction distogram directory by ``calc_distogram_loss``.
 
 Output
@@ -109,13 +109,13 @@ def distogram_loss_path_from_task(task: Dict[str, Any]) -> Optional[Path]:
     if not prediction_distograms:
         return None
     distogram_dir = Path(prediction_distograms[0]).parent
-    return distogram_dir / "distogram_loss_real_final.json"
+    return distogram_dir / "distogram_loss_final.json"
 
 
 def parse_seed_results(
     distogram_loss_file: Path, ref1: str, ref2: str
 ) -> Dict[int, Dict[str, Dict[str, float]]]:
-    """Parse seed results from distogram_loss_real_final.json."""
+    """Parse seed results from distogram_loss_final.json."""
     per_seed_loss: Dict[int, Dict[str, Dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
     with open(distogram_loss_file, "r") as f:
         distogram_loss_data = json.load(f)[0]
@@ -259,6 +259,9 @@ def _task_index(tasks: List[Dict[str, Any]]) -> Dict[Tuple[str, str, str, str], 
     return idx
 
 
+_METHOD_TASK_ALIAS = {"boltz1": "boltz-1", "boltz2": "boltz-2"}
+
+
 def _find_task(
     idx: Dict[Tuple[str, str, str, str], Dict[str, Any]],
     method: str,
@@ -266,7 +269,42 @@ def _find_task(
     cluster_id: str,
     pred_yaml_tag: str,
 ) -> Optional[Dict[str, Any]]:
-    return idx.get((method, pair_type, cluster_id, pred_yaml_tag))
+    # Tasks use dashed method names (``boltz-1``/``boltz-2``); try caller's
+    # form first then the dashed alias.
+    t = idx.get((method, pair_type, cluster_id, pred_yaml_tag))
+    if t is not None:
+        return t
+    aliased = _METHOD_TASK_ALIAS.get(method)
+    if aliased is not None:
+        return idx.get((aliased, pair_type, cluster_id, pred_yaml_tag))
+    return None
+
+
+def _find_cluster_task(
+    tasks: List[Dict[str, Any]],
+    method: str,
+    pair_type: str,
+    cluster_id: str,
+    suffix: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Any task for ``(method, pair_type, cluster_id)`` regardless of
+    ``prediction_yaml_tag``. Fallback for valid_pair entries whose
+    requested entity wasn't modeled directly. ``suffix='_m'`` / ``'_x'``
+    constrains to apo / holo side for induced sets.
+    """
+    aliased = _METHOD_TASK_ALIAS.get(method, method)
+    for t in tasks:
+        if t.get("method_type") != pair_type or t.get("cluster_id") != cluster_id:
+            continue
+        m = t.get("method")
+        if m != method and m != aliased:
+            continue
+        if suffix is not None:
+            tag = t.get("prediction_yaml_tag", "") or ""
+            if not tag.endswith(suffix):
+                continue
+        return t
+    return None
 
 
 def process_apo_monomers(
@@ -278,16 +316,32 @@ def process_apo_monomers(
     ref2: str,
     method: str,
     error_list: List[Dict[str, Any]],
+    pair_type: str = "apo-monomers",
+    all_tasks: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
-    pair_type = "apo-monomers"
-    model_entity = pair_dict.get("model_entity")
-    if not model_entity:
-        return None
+    # New valid_pairs schema doesn't say which ref was modeled -- probe
+    # ref1, ref2, then any cluster task (cross-pair info is in every
+    # per-prediction loss/diff file).
+    candidates: List[str] = []
+    me = pair_dict.get("model_entity")
+    if me:
+        candidates.append(me)
+    for c in (ref1, ref2):
+        if c and c not in candidates:
+            candidates.append(c)
 
-    # reference_distogram_diff.json path (repo convention)
-    t = _find_task(task_idx, method, pair_type, cluster_id, model_entity)
+    t: Optional[Dict[str, Any]] = None
+    for cand in candidates:
+        t = _find_task(task_idx, method, pair_type, cluster_id, cand)
+        if t is not None:
+            break
+    if t is None and all_tasks is not None:
+        t = _find_cluster_task(all_tasks, method, pair_type, cluster_id)
     if t is None:
-        error_list.append({"pair_type": pair_type, "cluster_id": cluster_id, "method": method, "error": "task_not_found"})
+        error_list.append({
+            "pair_type": pair_type, "cluster_id": cluster_id, "method": method,
+            "ref1": ref1, "ref2": ref2, "error": "task_not_found",
+        })
         return None
 
     ref_diff_path = reference_distogram_diff_path(ref_distogram_root, t)
@@ -317,8 +371,8 @@ def process_apo_monomers(
                 "method": method,
                 "ref1": ref1,
                 "ref2": ref2,
-                "model_entity": model_entity,
-                "error": "distogram_loss_real_final.json not found",
+                "model_entity": me,
+                "error": "distogram_loss_final.json not found",
             }
         )
         return None
@@ -375,6 +429,7 @@ def process_induced(
     method: str,
     pair_type: str,
     error_list: List[Dict[str, Any]],
+    all_tasks: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     if "_m" not in ref1 or "_x" not in ref2:
         error_list.append(
@@ -394,7 +449,11 @@ def process_induced(
     if not apo_model_entity or not holo_model_entity:
         return None
 
+    # Cluster fallback (see process_apo_monomers): valid_pair may name an
+    # entity not modeled here; any same-side task carries the full ref list.
     t_apo = _find_task(task_idx, method, pair_type, cluster_id, apo_model_entity)
+    if t_apo is None and all_tasks is not None:
+        t_apo = _find_cluster_task(all_tasks, method, pair_type, cluster_id, suffix="_m")
     if t_apo is None:
         return None
     ref_diff_path = reference_distogram_diff_path(ref_distogram_root, t_apo)
@@ -416,6 +475,8 @@ def process_induced(
     dist_ref1_ref2, dynamic_dist_ref1_ref2 = dist_result
 
     t_holo = _find_task(task_idx, method, pair_type, cluster_id, holo_model_entity)
+    if t_holo is None and all_tasks is not None:
+        t_holo = _find_cluster_task(all_tasks, method, pair_type, cluster_id, suffix="_x")
     if t_holo is None:
         return None
 
@@ -423,12 +484,12 @@ def process_induced(
     distogram_loss_file_holo = distogram_loss_path_from_task(t_holo)
     if distogram_loss_file_apo is None or not distogram_loss_file_apo.exists():
         error_list.append(
-            {"pair_type": pair_type, "cluster_id": cluster_id, "method": method, "error": "APO distogram_loss_real_final.json not found"}
+            {"pair_type": pair_type, "cluster_id": cluster_id, "method": method, "error": "APO distogram_loss_final.json not found"}
         )
         return None
     if distogram_loss_file_holo is None or not distogram_loss_file_holo.exists():
         error_list.append(
-            {"pair_type": pair_type, "cluster_id": cluster_id, "method": method, "error": "HOLO distogram_loss_real_final.json not found"}
+            {"pair_type": pair_type, "cluster_id": cluster_id, "method": method, "error": "HOLO distogram_loss_final.json not found"}
         )
         return None
 
@@ -512,23 +573,44 @@ def main() -> None:
     error_list: List[Dict[str, Any]] = []
 
     for pair_type, pairs in valid_pairs_data.items():
+        # ``apo-monomers`` (legacy) and ``intrinsic`` (current) name the
+        # same set; keep the original key for task-index lookups.
+        is_apo_set = pair_type in ("apo-monomers", "intrinsic")
         dict_per_pair: Dict[str, Any] = {}
         for cluster_id, pair_info in pairs.items():
-            for pair_dict in pair_info:
-                ref1 = pair_dict["valid_pair"][0]
-                ref2 = pair_dict["valid_pair"][1]
+            for pair_item in pair_info:
+                # Accept both new (list ``[ref1, ref2]``) and legacy
+                # (dict with ``valid_pair`` + ``*_model_entity``) schemas.
+                # Naming convention is 100% consistent in the dataset:
+                # intrinsic = (_m, _m); induced = (_m, _x).
+                if isinstance(pair_item, list):
+                    ref1, ref2 = pair_item[0], pair_item[1]
+                    if is_apo_set:
+                        pair_dict = {"valid_pair": [ref1, ref2], "model_entity": ref1}
+                    else:
+                        pair_dict = {
+                            "valid_pair": [ref1, ref2],
+                            "apo_model_entity": ref1,
+                            "holo_model_entity": ref2,
+                        }
+                else:
+                    pair_dict = pair_item
+                    ref1 = pair_dict["valid_pair"][0]
+                    ref2 = pair_dict["valid_pair"][1]
 
                 dict_per_method: Dict[str, Any] = {}
                 for method in methods:
-                    if pair_type == "apo-monomers":
+                    if is_apo_set:
                         result = process_apo_monomers(
-                            idx, ref_distogram_root, cluster_id, pair_dict, ref1, ref2, method, error_list
+                            idx, ref_distogram_root, cluster_id, pair_dict, ref1, ref2, method, error_list,
+                            pair_type=pair_type, all_tasks=tasks,
                         )
                     else:
                         if method == "bioemu":
                             continue
                         result = process_induced(
-                            idx, ref_distogram_root, cluster_id, pair_dict, ref1, ref2, method, pair_type, error_list
+                            idx, ref_distogram_root, cluster_id, pair_dict, ref1, ref2, method, pair_type, error_list,
+                            all_tasks=tasks,
                         )
                     if result is not None:
                         dict_per_method[method] = result

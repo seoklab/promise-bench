@@ -201,7 +201,7 @@ This augmented JSON (the `*_with_cb_paths.json` next to the input) is what you s
 
 | Step | Command (pattern) | Typical inputs | Typical outputs |
 |:----:|---------------------|----------------|-----------------|
-| Loss | `python -m eval.distogram.calc_distogram_loss --tasks …` | Final **`distogram_tasks.json`**, prediction npz paths in tasks, MSAs, rep-seq JSON, ref-diff roots | Per-prediction dir: e.g. **`distogram_loss_real_final.json`** (see module for exact filenames) |
+| Loss | `python -m eval.distogram.calc_distogram_loss --tasks ...` | Final **`distogram_tasks.json`**, prediction npz paths in tasks, MSAs, rep-seq JSON, ref-diff roots | Per-prediction dir: **`distogram_loss_final.json`** |
 | Ref–ref diff | `python -m eval.distogram.calc_reference_distogram_diff --tasks …` | Same task JSON + MSA/rep-seq + ref layout | Reference–reference distogram diff tree under your ref_distogram root |
 | ConfBench-style | `python -m eval.distogram.calc_distogram_confbench …` | `valid_pairs`, `distogram_tasks`, ref_distogram paths | Aggregated scores JSON (see `--help`) |
 

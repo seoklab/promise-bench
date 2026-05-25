@@ -359,8 +359,19 @@ def calc_distogram_loss_multi_dynamic(
     )
 
     if len(common_seq_ids) < 3:
-        print("  ❌ Not enough common residues for distogram loss calculation.")
-        return float("nan"), 0, {}, {}, {}, float("nan")
+        print("  [ERROR] Not enough common residues for distogram loss calculation.")
+        # Full 9-tuple to match the normal return signature.
+        return (
+            float("nan"),  # total_loss
+            0,             # n_aligned_total
+            {},            # dynamic_losses
+            {},            # n_aligned_dynamics
+            {},            # dynamic_entropies
+            float("nan"),  # total_entropy
+            {},            # total_losses_per_pair
+            {},            # n_aligned_totals_per_pair
+            {},            # total_entropies_per_pair
+        )
 
     # Get indices for both distograms
     ref_cb_indices = [ref_seq_id_to_ref_cb_idx[seq_id] for seq_id in common_seq_ids]
@@ -597,7 +608,7 @@ def calc_expected_distance_error(
     expectation_of_distance = expectation_of_distance_matrix.mean()
 
     # Method 2: |E[d] - d_true| - distance of expectation
-    # Compute expected predicted distance: Σ p_i * bin_center_i
+    # Compute expected predicted distance: sum(p_i * bin_center_i)
     predicted_distances = (
         disto_pred_filtered * bin_centers_np[np.newaxis, np.newaxis, :]
     ).sum(axis=-1)  # (N, N)
@@ -700,7 +711,18 @@ def calc_expected_distance_error_multi_dynamic(
     )
 
     if len(common_seq_ids) < 3:
-        return float("nan"), float("nan"), 0, {}, {}, {}
+        # Full 9-tuple to match the normal return signature.
+        return (
+            float("nan"),  # expectation_of_distance
+            float("nan"),  # distance_of_expectation
+            0,             # n_aligned (= len(common_seq_ids))
+            {},            # dynamic_expectation_of_distances
+            {},            # dynamic_distance_of_expectations
+            {},            # n_aligned_dynamics
+            {},            # total_expectation_of_distances_per_pair
+            {},            # total_distance_of_expectations_per_pair
+            {},            # n_aligned_totals_per_pair
+        )
 
     # Get indices for both distograms
     ref_cb_indices = [ref_seq_id_to_ref_cb_idx[seq_id] for seq_id in common_seq_ids]
@@ -1103,7 +1125,7 @@ def process_task(
                     break
 
             if ref_aligned_seq is None:
-                print(f"  ❌ Skipping reference {reference_yaml_tag}: ref_id '{ref_id}' not found in MSA")
+                print(f"  [ERROR] Skipping reference {reference_yaml_tag}: ref_id '{ref_id}' not found in MSA")
                 print(f"     Tried: {[p for p in possible_ids if p]}")
                 print(f"     Available in MSA: {list(alignments.keys())[:10]}... (showing first 10)")
                 errors.append(
@@ -1866,7 +1888,7 @@ def main():
             Path(prediction_distograms[0]).parent if prediction_distograms else None
         )
         output_file = (
-            distogram_dir / "distogram_loss_real_final.json" if distogram_dir else None
+            distogram_dir / "distogram_loss_final.json" if distogram_dir else None
         )
 
         # Smart skip: verify per-reference tags and per-dynamic-pair keys
@@ -1947,7 +1969,7 @@ def main():
                 print(f"    Will recompute all references for this task")
                 existing_results = []
 
-        # Gaps vs on-disk JSON → full recompute for this task (incremental merge lives in elif False, currently off).
+        # Gaps vs on-disk JSON -> full recompute for this task (incremental merge lives in elif False, currently off).
         if missing_dynamic_pairs or missing_reference_tags:
             # Missing dynamic pairs or new reference tags require recomputing all references together
             if missing_dynamic_pairs:
@@ -2137,7 +2159,7 @@ def main():
 
         if valid_total_losses:
             print(
-                f"  Mean total loss: {np.mean(valid_total_losses):.4f} ± {np.std(valid_total_losses):.4f}"
+                f"  Mean total loss: {np.mean(valid_total_losses):.4f} +/- {np.std(valid_total_losses):.4f}"
             )
             print(f"  Min total loss: {np.min(valid_total_losses):.4f}")
             print(f"  Max total loss: {np.max(valid_total_losses):.4f}")
@@ -2145,7 +2167,7 @@ def main():
 
         if valid_dynamic_losses:
             print(
-                f"  Mean dynamic loss: {np.mean(valid_dynamic_losses):.4f} ± {np.std(valid_dynamic_losses):.4f}"
+                f"  Mean dynamic loss: {np.mean(valid_dynamic_losses):.4f} +/- {np.std(valid_dynamic_losses):.4f}"
             )
             print(f"  Min dynamic loss: {np.min(valid_dynamic_losses):.4f}")
             print(f"  Max dynamic loss: {np.max(valid_dynamic_losses):.4f}")
@@ -2153,22 +2175,22 @@ def main():
 
         if valid_expectation_of_distance:
             print(
-                f"  Mean expectation of distance: {np.mean(valid_expectation_of_distance):.4f} ± {np.std(valid_expectation_of_distance):.4f} Å"
+                f"  Mean expectation of distance: {np.mean(valid_expectation_of_distance):.4f} +/- {np.std(valid_expectation_of_distance):.4f} A"
             )
 
         if valid_dynamic_expectation_of_distance:
             print(
-                f"  Mean dynamic expectation of distance: {np.mean(valid_dynamic_expectation_of_distance):.4f} ± {np.std(valid_dynamic_expectation_of_distance):.4f} Å"
+                f"  Mean dynamic expectation of distance: {np.mean(valid_dynamic_expectation_of_distance):.4f} +/- {np.std(valid_dynamic_expectation_of_distance):.4f} A"
             )
 
         if valid_distance_of_expectation:
             print(
-                f"  Mean distance of expectation: {np.mean(valid_distance_of_expectation):.4f} ± {np.std(valid_distance_of_expectation):.4f} Å"
+                f"  Mean distance of expectation: {np.mean(valid_distance_of_expectation):.4f} +/- {np.std(valid_distance_of_expectation):.4f} A"
             )
 
         if valid_dynamic_distance_of_expectation:
             print(
-                f"  Mean dynamic distance of expectation: {np.mean(valid_dynamic_distance_of_expectation):.4f} ± {np.std(valid_dynamic_distance_of_expectation):.4f} Å"
+                f"  Mean dynamic distance of expectation: {np.mean(valid_dynamic_distance_of_expectation):.4f} +/- {np.std(valid_dynamic_distance_of_expectation):.4f} A"
             )
 
 
