@@ -842,11 +842,12 @@ def process_distogram_file(
                                 info["reference_cb_json"] = ref_map[ref_path]
 
             augmented_out = (
-                distogram_json.parent / f"{distogram_json.stem}_with_cb_paths.json"
+                ref_output_base / f"{distogram_json.stem}_with_cb_paths.json"
             )
+            augmented_out.parent.mkdir(parents=True, exist_ok=True)
             with open(augmented_out, "w") as af:
                 json.dump(augmented, af, indent=2)
-            print(f"Saved augmented distogram JSON with cb paths to {augmented_out}")
+            print(f"Saved augmented answer-map JSON with cb paths to {augmented_out}")
         except Exception as e:
             errors.append({"error": "augment_write_failed", "message": str(e)})
 
@@ -926,15 +927,19 @@ def main():
         type=str,
         help=(
             "Path to seq_cluster_to_answer_map.json (from curation.make_pairs); "
-            "extracts Cb for every reference CIF and writes "
-            "<stem>_with_cb_paths.json next to the input."
+            "extracts Cb for every reference CIF and writes the augmented "
+            "<stem>_with_cb_paths.json under --ref-output."
         ),
     )
     parser.add_argument(
         "--ref-output",
         type=str,
         default=None,
-        help="Output root for *_cb.json (default: eval.dirs.ref_coords / external.ref_coords_dir)",
+        help=(
+            "Output root for *_cb.json, the augmented "
+            "<stem>_with_cb_paths.json, and any error file "
+            "(default: eval.dirs.ref_coords / external.ref_coords_dir)"
+        ),
     )
     parser.add_argument(
         "--no-skip",
@@ -965,12 +970,13 @@ def main():
             end_idx=args.end,
         )
 
-        # Save errors if any
+        # Save errors if any (under the writable --ref-output directory).
         if errors:
             error_path = (
-                answer_map_path.parent
+                ref_output
                 / f"extract_cb_errors_answer_map_{args.start}_{args.end or 'end'}.json"
             )
+            error_path.parent.mkdir(parents=True, exist_ok=True)
             with open(error_path, "w") as f:
                 json.dump(errors, f, indent=2)
             print(f"Saved {len(errors)} errors to {error_path}")
