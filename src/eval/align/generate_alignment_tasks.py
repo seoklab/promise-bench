@@ -105,6 +105,8 @@ def extract_file_info(file_path: Path, method: str, yaml_tag: str) -> Dict[str, 
         for part in file_path.parts:
             if part.startswith("seed_"):
                 seed = part.split("_")[1] if "_" in part else part
+            elif part.startswith("sample_"):
+                sample = part.split("_")[1] if "_" in part else "1"
             elif part.startswith("fold_job_"):
                 sample = part.split("_")[-1] if "_" in part else "1"
             elif "seed-" in part and "sample-" in part:
