@@ -34,7 +34,7 @@ CUTOFFS = {
 
 # CSV categories
 CSV_CATEGORIES = [
-    "apo-monomers",
+    "intrinsic",
     "ligand-induced",
     "protein-induced",
 ]
