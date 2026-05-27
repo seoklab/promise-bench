@@ -245,6 +245,18 @@ class EvalConfig(SectionConfig):
             return p
         return self.dir("distogram") / "distogram_tasks.json"
 
+    def align_results_dir(self, cli: str | Path | None = None) -> Path:
+        """Directory holding ``align_part*.json`` produced by ``struct_align_batch``."""
+        if cli:
+            return Path(cli)
+        return self.dir("align_results")
+
+    def conformation_success_dir(self, cli: str | Path | None = None) -> Path:
+        """Output directory for step8 conformation-success analysis artefacts."""
+        if cli:
+            return Path(cli)
+        return self.dir("conformation_success")
+
 
 # =====================================================================
 # Singleton instances
