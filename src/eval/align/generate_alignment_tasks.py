@@ -198,6 +198,32 @@ def _normalize_pair_info(
     }
 
 
+def _other_cluster_apo_refs(
+    cluster_data: Dict[str, Any], apo_entity: str
+) -> List[str]:
+    """Cluster 의 ``apo`` entries 중 *apo_entity* 가 아닌 다른 apo references 반환.
+
+    Used for the relaxed apo success rule on induced pairs: an apo prediction may match
+    any apo conformation in the same cluster, not only the pair's designated apo.
+    Returns yaml_tag (``_m`` suffix) form, e.g. ``"3d8r_1_A1_m"``.
+    """
+    apo_entries = cluster_data.get("apo", []) or []
+    if not apo_entries or not apo_entity:
+        return []
+    apo_base = apo_entity[:-2] if apo_entity.endswith("_m") else apo_entity
+    out: List[str] = []
+    seen = {apo_base}
+    for e in apo_entries:
+        if "_conf_" not in e:
+            continue
+        base = e.rsplit("_conf_", 1)[0]
+        if base in seen:
+            continue
+        seen.add(base)
+        out.append(f"{base}_m")
+    return out
+
+
 def _get_holo_predictions(cluster_data: Dict[str, Any], holo_entity: str) -> Dict[str, Any]:
     """Return per-method prediction info for one holo yaml tag."""
     raw = cluster_data.get("holo_predictions", {})
@@ -282,10 +308,14 @@ def generate_alignment_tasks(
                 if is_intrinsic:
                     model_entity = normalized["model_entity"]
                     reference_entities = [model_entity]
+                    extra_apo_mobiles: List[str] = []
                 else:
                     reference_entities = [apo_entity, holo_entity]
+                    extra_apo_mobiles = _other_cluster_apo_refs(cluster_data, apo_entity)
 
                 print(f"  Pair: {valid_pair} -> align to {reference_entities}")
+                if extra_apo_mobiles:
+                    print(f"    + extra apo-mobile refs (relaxed apo rule): {extra_apo_mobiles}")
 
                 holo_preds = (
                     _get_holo_predictions(cluster_data, holo_entity)
@@ -337,7 +367,12 @@ def generate_alignment_tasks(
 
                         print(f"    {method} -> {reference}: {len(pred_files)} prediction(s)")
 
-                        for mobile_yaml in mobiles:
+                        if (not is_intrinsic) and reference == apo_entity and extra_apo_mobiles:
+                            per_ref_mobiles = list(mobiles) + list(extra_apo_mobiles)
+                        else:
+                            per_ref_mobiles = list(mobiles)
+
+                        for mobile_yaml in per_ref_mobiles:
                             mobile_cif = find_reference_cif(mobile_yaml, cif_root)
                             if not mobile_cif:
                                 error_list.append(
@@ -398,6 +433,8 @@ def generate_alignment_tasks(
                                         reference_state = "apo"
                                     elif mobile_yaml == holo_entity:
                                         reference_state = "holo"
+                                    elif mobile_yaml in extra_apo_mobiles:
+                                        reference_state = "apo"
                                     elif mobile_yaml == valid_pair[0]:
                                         reference_state = "apo"
                                     else:
